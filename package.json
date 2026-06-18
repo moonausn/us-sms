@@ -1,11 +1,6 @@
 {
-  "name": "ussms-backend",
+  "name": "ussms-api",
   "version": "1.0.0",
-  "description": "US SMS API Backend",
-  "main": "api/index.js",
-  "scripts": {
-    "start": "node api/index.js"
-  },
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
