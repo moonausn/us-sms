@@ -2,7 +2,7 @@
   "name": "ussms-backend",
   "version": "1.0.0",
   "description": "US SMS API Backend",
-  "main": "api/index.js",      // ← Yeh sahi hai
+  "main": "api/index.js",
   "scripts": {
     "start": "node api/index.js"
   },
