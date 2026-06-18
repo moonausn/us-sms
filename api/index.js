@@ -1,6 +1,6 @@
 // ===========================================
-// US SMS - BACKEND API
-// Complete with all endpoints for SMS service
+// US SMS - COMPLETE BACKEND API
+// All endpoints with Admin Authentication
 // ===========================================
 
 const express = require('express');
@@ -85,6 +85,47 @@ const defaultPricingSettings = {
 };
 
 // ===========================================
+// ADMIN AUTH MIDDLEWARE
+// ===========================================
+const verifyAdmin = async (req, res, next) => {
+  try {
+    // Check admin token from headers, query, or body
+    const adminToken = req.headers['admin-token'] || req.query.adminToken || req.body.adminToken;
+    const adminId = req.query.adminId || req.body.adminId;
+    
+    // Get valid admin token from environment
+    const validAdminToken = process.env.ADMIN_TOKEN;
+    
+    if (!adminToken || adminToken !== validAdminToken) {
+      return res.status(401).json(formatResponse(false, null, 'Invalid admin token'));
+    }
+    
+    if (!adminId) {
+      return res.status(400).json(formatResponse(false, null, 'adminId required'));
+    }
+    
+    // Verify admin in database
+    if (!db) {
+      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
+    }
+    
+    const adminDoc = await db.collection('users').doc(adminId).get();
+    
+    if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
+      return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
+    }
+    
+    req.adminData = adminDoc.data();
+    req.adminId = adminId;
+    next();
+    
+  } catch (error) {
+    console.error('Admin verification error:', error);
+    return res.status(500).json(formatResponse(false, null, 'Authentication error: ' + error.message));
+  }
+};
+
+// ===========================================
 // 1. AUTH ENDPOINTS
 // ===========================================
 
@@ -104,6 +145,7 @@ app.post('/api/auth/signup', async (req, res) => {
     }
     
     try {
+      // Check if user already exists
       try {
         await auth.getUserByEmail(email);
         return res.status(400).json(formatResponse(false, null, 'User already exists'));
@@ -111,6 +153,7 @@ app.post('/api/auth/signup', async (req, res) => {
         console.log("User doesn't exist in Auth, creating...");
       }
       
+      // Create user in Firebase Auth
       const userRecord = await auth.createUser({
         uid: uid,
         email: email,
@@ -119,6 +162,7 @@ app.post('/api/auth/signup', async (req, res) => {
       });
       console.log("✅ Firebase Auth user created:", userRecord.uid);
       
+      // Create user data in Firestore
       const userData = {
         uid: uid,
         email,
@@ -148,7 +192,7 @@ app.post('/api/auth/signup', async (req, res) => {
   }
 });
 
-// LOGIN - POST
+// LOGIN - POST (WITH FIREBASE REST API)
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -164,12 +208,14 @@ app.post('/api/auth/login', async (req, res) => {
     }
     
     try {
+      // Firebase REST API se password verify karo
       const apiKey = process.env.FIREBASE_API_KEY;
       
       if (!apiKey) {
         return res.status(500).json(formatResponse(false, null, 'Firebase API key not configured'));
       }
       
+      // Call Firebase REST API to verify password
       const verifyResponse = await fetch(
         `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
         {
@@ -192,6 +238,7 @@ app.post('/api/auth/login', async (req, res) => {
       
       console.log(`✅ Password verified for: ${email}, UID: ${verifyData.localId}`);
       
+      // Get user from Firestore
       const usersRef = db.collection('users');
       const snapshot = await usersRef.where('email', '==', email).limit(1).get();
       
@@ -202,10 +249,12 @@ app.post('/api/auth/login', async (req, res) => {
       const userDoc = snapshot.docs[0];
       const userData = userDoc.data();
       
+      // Update last login
       await userDoc.ref.update({
         lastLogin: new Date().toISOString()
       });
       
+      // Create custom token for frontend
       const customToken = await auth.createCustomToken(userDoc.id);
       
       console.log(`✅ Login successful for: ${email}`);
@@ -231,7 +280,49 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // ===========================================
-// 2. USER ENDPOINTS
+// 2. ADMIN AUTH ENDPOINT (ENV BASED)
+// ===========================================
+
+// ADMIN LOGIN - POST (Using Environment Variables)
+app.post('/api/admin/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const adminToken = req.headers['admin-token'];
+    
+    // Check admin token from environment
+    const validAdminToken = process.env.ADMIN_TOKEN;
+    
+    if (!adminToken || adminToken !== validAdminToken) {
+      return res.status(401).json(formatResponse(false, null, 'Invalid admin token'));
+    }
+    
+    // Check admin credentials from environment
+    const adminEmail = process.env.ADMIN_EMAIL;
+    const adminPassword = process.env.ADMIN_PASSWORD;
+    
+    if (!email || !password) {
+      return res.status(400).json(formatResponse(false, null, 'Email and password required'));
+    }
+    
+    if (email !== adminEmail || password !== adminPassword) {
+      return res.status(401).json(formatResponse(false, null, 'Invalid admin credentials'));
+    }
+    
+    console.log(`✅ Admin login successful: ${email}`);
+    
+    return res.json(formatResponse(true, {
+      adminEmail: email,
+      role: 'admin'
+    }, 'Admin login successful'));
+    
+  } catch (error) {
+    console.error('Admin login error:', error);
+    return res.status(500).json(formatResponse(false, null, error.message));
+  }
+});
+
+// ===========================================
+// 3. USER ENDPOINTS
 // ===========================================
 
 // GET USER DATA - GET
@@ -337,9 +428,11 @@ app.post('/api/user/numbers/delete', async (req, res) => {
       
       const userData = userDoc.data();
       
+      // Remove from purchasedNumbers array
       const updatedPurchasedNumbers = (userData.purchasedNumbers || [])
         .filter(num => !numbers.includes(num));
       
+      // Remove from purchasedNumbersData array
       let updatedPurchasedNumbersData = userData.purchasedNumbersData || [];
       updatedPurchasedNumbersData = updatedPurchasedNumbersData
         .filter(item => !numbers.includes(item.phoneNumber));
@@ -362,7 +455,7 @@ app.post('/api/user/numbers/delete', async (req, res) => {
 });
 
 // ===========================================
-// 3. NUMBERS ENDPOINTS
+// 4. NUMBERS ENDPOINTS
 // ===========================================
 
 // GET AVAILABLE NUMBERS - GET
@@ -461,6 +554,7 @@ app.post('/api/numbers/buy', async (req, res) => {
         price: numberPrice
       };
       
+      // Update number
       await numberRef.update({
         status: 'sold',
         soldTo: userId,
@@ -468,6 +562,7 @@ app.post('/api/numbers/buy', async (req, res) => {
         soldAt: new Date().toISOString()
       });
       
+      // Update user
       await userRef.update({
         credits: admin.firestore.FieldValue.increment(-numberPrice),
         purchasedNumbers: admin.firestore.FieldValue.arrayUnion(numberData.phoneNumber),
@@ -519,6 +614,7 @@ app.post('/api/numbers/bulk-buy', async (req, res) => {
         return res.status(400).json(formatResponse(false, null, 'Insufficient credits'));
       }
       
+      // Prepare data
       const purchasedNumbersData = numbers.map(num => ({
         phoneNumber: num.phoneNumber,
         apiUrl: num.apiUrl,
@@ -531,8 +627,10 @@ app.post('/api/numbers/bulk-buy', async (req, res) => {
       
       const phoneNumbersList = numbers.map(num => num.phoneNumber);
       
+      // Use batch for atomic operation
       const batch = db.batch();
       
+      // Update each number
       numbers.forEach(num => {
         const numberRef = db.collection('numbers').doc(num.id);
         batch.update(numberRef, {
@@ -543,6 +641,7 @@ app.post('/api/numbers/bulk-buy', async (req, res) => {
         });
       });
       
+      // Update user
       batch.update(userRef, {
         credits: admin.firestore.FieldValue.increment(-totalPrice),
         purchasedNumbers: admin.firestore.FieldValue.arrayUnion(...phoneNumbersList),
@@ -569,7 +668,7 @@ app.post('/api/numbers/bulk-buy', async (req, res) => {
 });
 
 // ===========================================
-// 4. PUBLIC PRICING SETTINGS ENDPOINT
+// 5. PUBLIC PRICING SETTINGS ENDPOINT
 // ===========================================
 
 // GET PRICING SETTINGS - PUBLIC
@@ -603,30 +702,57 @@ app.get('/api/settings/pricing', async (req, res) => {
 });
 
 // ===========================================
-// 5. ADMIN ENDPOINTS (PROTECTED)
+// 6. ADMIN ENDPOINTS (PROTECTED WITH verifyAdmin)
 // ===========================================
 
-// ADMIN STATS - GET
-app.get('/api/admin/stats', async (req, res) => {
+// ADMIN DASHBOARD - POST (Full Data)
+app.post('/api/admin/dashboard', verifyAdmin, async (req, res) => {
   try {
-    const { adminId } = req.query;
-    
-    if (!adminId) {
-      return res.status(400).json(formatResponse(false, null, 'adminId required'));
-    }
-    
-    console.log(`Get admin stats for: ${adminId}`);
+    console.log(`Get admin dashboard data for: ${req.adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      const adminDoc = await db.collection('users').doc(adminId).get();
-      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
-        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
-      }
+      const usersSnapshot = await db.collection('users').get();
+      const numbersSnapshot = await db.collection('numbers').get();
       
+      let availableCount = 0;
+      let soldCount = 0;
+      
+      numbersSnapshot.forEach(doc => {
+        const data = doc.data();
+        if (data.status === 'available') availableCount++;
+        else if (data.status === 'sold') soldCount++;
+      });
+      
+      return res.json(formatResponse(true, {
+        totalUsers: usersSnapshot.size,
+        availableNumbers: availableCount,
+        soldNumbers: soldCount
+      }));
+    } catch (firebaseError) {
+      console.error('Firebase dashboard error:', firebaseError);
+      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
+    }
+    
+  } catch (error) {
+    console.error('Admin dashboard error:', error);
+    return res.status(500).json(formatResponse(false, null, error.message));
+  }
+});
+
+// ADMIN STATS - GET
+app.get('/api/admin/stats', verifyAdmin, async (req, res) => {
+  try {
+    console.log(`Get admin stats for: ${req.adminId}`);
+    
+    if (!db) {
+      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
+    }
+    
+    try {
       const usersSnapshot = await db.collection('users').get();
       const numbersSnapshot = await db.collection('numbers').get();
       
@@ -656,26 +782,17 @@ app.get('/api/admin/stats', async (req, res) => {
 });
 
 // GET ALL USERS - GET
-app.get('/api/admin/users', async (req, res) => {
+app.get('/api/admin/users', verifyAdmin, async (req, res) => {
   try {
-    const { adminId, limit = 50 } = req.query;
+    const { limit = 50 } = req.query;
     
-    if (!adminId) {
-      return res.status(400).json(formatResponse(false, null, 'adminId required'));
-    }
-    
-    console.log(`Get users for admin: ${adminId}, limit: ${limit}`);
+    console.log(`Get users for admin: ${req.adminId}, limit: ${limit}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      const adminDoc = await db.collection('users').doc(adminId).get();
-      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
-        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
-      }
-      
       let query = db.collection('users').orderBy('createdAt', 'desc');
       const snapshot = await query.limit(parseInt(limit)).get();
       
@@ -709,12 +826,12 @@ app.get('/api/admin/users', async (req, res) => {
 });
 
 // SEARCH USER BY EMAIL - GET
-app.get('/api/admin/users/search', async (req, res) => {
+app.get('/api/admin/users/search', verifyAdmin, async (req, res) => {
   try {
-    const { adminId, email } = req.query;
+    const { email } = req.query;
     
-    if (!adminId || !email) {
-      return res.status(400).json(formatResponse(false, null, 'adminId and email required'));
+    if (!email) {
+      return res.status(400).json(formatResponse(false, null, 'email required'));
     }
     
     console.log(`Search user by email: ${email}`);
@@ -724,11 +841,6 @@ app.get('/api/admin/users/search', async (req, res) => {
     }
     
     try {
-      const adminDoc = await db.collection('users').doc(adminId).get();
-      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
-        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
-      }
-      
       const snapshot = await db.collection('users')
         .where('email', '==', email.toLowerCase())
         .limit(1)
@@ -765,13 +877,9 @@ app.get('/api/admin/users/search', async (req, res) => {
 });
 
 // GET ALL NUMBERS (ADMIN) - GET
-app.get('/api/admin/numbers', async (req, res) => {
+app.get('/api/admin/numbers', verifyAdmin, async (req, res) => {
   try {
-    const { adminId, filter = 'all', limit = 50 } = req.query;
-    
-    if (!adminId) {
-      return res.status(400).json(formatResponse(false, null, 'adminId required'));
-    }
+    const { filter = 'all', limit = 50 } = req.query;
     
     console.log(`Get admin numbers, filter: ${filter}, limit: ${limit}`);
     
@@ -780,11 +888,6 @@ app.get('/api/admin/numbers', async (req, res) => {
     }
     
     try {
-      const adminDoc = await db.collection('users').doc(adminId).get();
-      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
-        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
-      }
-      
       let numbersQuery = db.collection('numbers').orderBy('addedAt', 'desc');
       
       if (filter !== 'all') {
@@ -816,26 +919,21 @@ app.get('/api/admin/numbers', async (req, res) => {
 });
 
 // UPLOAD NUMBERS - POST
-app.post('/api/admin/numbers/upload', async (req, res) => {
+app.post('/api/admin/numbers/upload', verifyAdmin, async (req, res) => {
   try {
-    const { adminId, numbers, price, type } = req.body;
+    const { numbers, price, type } = req.body;
     
-    if (!adminId || !numbers || !numbers.length) {
+    if (!numbers || !numbers.length) {
       return res.status(400).json(formatResponse(false, null, 'Invalid request'));
     }
     
-    console.log(`Upload ${numbers.length} numbers by admin: ${adminId}`);
+    console.log(`Upload ${numbers.length} numbers by admin: ${req.adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      const adminDoc = await db.collection('users').doc(adminId).get();
-      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
-        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
-      }
-      
       const batch = db.batch();
       let successCount = 0;
       
@@ -872,7 +970,7 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
             type: type || 'SMS',
             status: 'available',
             addedAt: new Date().toISOString(),
-            addedBy: adminId
+            addedBy: req.adminId
           });
           
           successCount++;
@@ -899,26 +997,21 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
 });
 
 // DELETE NUMBERS (ADMIN) - POST
-app.post('/api/admin/numbers/delete', async (req, res) => {
+app.post('/api/admin/numbers/delete', verifyAdmin, async (req, res) => {
   try {
-    const { adminId, numberIds } = req.body;
+    const { numberIds } = req.body;
     
-    if (!adminId || !numberIds || !numberIds.length) {
+    if (!numberIds || !numberIds.length) {
       return res.status(400).json(formatResponse(false, null, 'Invalid request'));
     }
     
-    console.log(`Delete ${numberIds.length} numbers by admin: ${adminId}`);
+    console.log(`Delete ${numberIds.length} numbers by admin: ${req.adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      const adminDoc = await db.collection('users').doc(adminId).get();
-      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
-        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
-      }
-      
       const batch = db.batch();
       
       numberIds.forEach(id => {
@@ -941,26 +1034,15 @@ app.post('/api/admin/numbers/delete', async (req, res) => {
 });
 
 // DELETE ALL SOLD NUMBERS - POST
-app.post('/api/admin/numbers/delete-sold', async (req, res) => {
+app.post('/api/admin/numbers/delete-sold', verifyAdmin, async (req, res) => {
   try {
-    const { adminId } = req.body;
-    
-    if (!adminId) {
-      return res.status(400).json(formatResponse(false, null, 'adminId required'));
-    }
-    
-    console.log(`Delete all sold numbers by admin: ${adminId}`);
+    console.log(`Delete all sold numbers by admin: ${req.adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      const adminDoc = await db.collection('users').doc(adminId).get();
-      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
-        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
-      }
-      
       const snapshot = await db.collection('numbers')
         .where('status', '==', 'sold')
         .limit(100)
@@ -987,30 +1069,25 @@ app.post('/api/admin/numbers/delete-sold', async (req, res) => {
 });
 
 // UPDATE USER (ADMIN) - POST
-app.post('/api/admin/users/update', async (req, res) => {
+app.post('/api/admin/users/update', verifyAdmin, async (req, res) => {
   try {
-    const { adminId, userId, updates } = req.body;
+    const { userId, updates } = req.body;
     
-    if (!adminId || !userId || !updates) {
+    if (!userId || !updates) {
       return res.status(400).json(formatResponse(false, null, 'Invalid request'));
     }
     
-    console.log(`Update user ${userId} by admin: ${adminId}`);
+    console.log(`Update user ${userId} by admin: ${req.adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      const adminDoc = await db.collection('users').doc(adminId).get();
-      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
-        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
-      }
-      
       await db.collection('users').doc(userId).update({
         ...updates,
         updatedAt: new Date().toISOString(),
-        updatedBy: adminId
+        updatedBy: req.adminId
       });
       
       return res.json(formatResponse(true, null, 'User updated successfully'));
@@ -1026,34 +1103,32 @@ app.post('/api/admin/users/update', async (req, res) => {
 });
 
 // DELETE USER (ADMIN) - POST
-app.post('/api/admin/users/delete', async (req, res) => {
+app.post('/api/admin/users/delete', verifyAdmin, async (req, res) => {
   try {
-    const { adminId, userId } = req.body;
+    const { userId } = req.body;
     
-    if (!adminId || !userId) {
+    if (!userId) {
       return res.status(400).json(formatResponse(false, null, 'Invalid request'));
     }
     
-    console.log(`Delete user ${userId} by admin: ${adminId}`);
+    console.log(`Delete user ${userId} by admin: ${req.adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      const adminDoc = await db.collection('users').doc(adminId).get();
-      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
-        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
-      }
-      
+      // First get user data to check if exists
       const userDoc = await db.collection('users').doc(userId).get();
       
       if (!userDoc.exists) {
         return res.status(404).json(formatResponse(false, null, 'User not found'));
       }
       
+      // Delete from Firestore
       await db.collection('users').doc(userId).delete();
       
+      // Try to delete from Firebase Auth (if available)
       if (auth) {
         try {
           await auth.deleteUser(userId);
@@ -1078,30 +1153,25 @@ app.post('/api/admin/users/delete', async (req, res) => {
 });
 
 // UPDATE NUMBER (ADMIN) - POST
-app.post('/api/admin/numbers/update', async (req, res) => {
+app.post('/api/admin/numbers/update', verifyAdmin, async (req, res) => {
   try {
-    const { adminId, numberId, updates } = req.body;
+    const { numberId, updates } = req.body;
     
-    if (!adminId || !numberId || !updates) {
+    if (!numberId || !updates) {
       return res.status(400).json(formatResponse(false, null, 'Invalid request'));
     }
     
-    console.log(`Update number ${numberId} by admin: ${adminId}`);
+    console.log(`Update number ${numberId} by admin: ${req.adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      const adminDoc = await db.collection('users').doc(adminId).get();
-      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
-        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
-      }
-      
       await db.collection('numbers').doc(numberId).update({
         ...updates,
         updatedAt: new Date().toISOString(),
-        updatedBy: adminId
+        updatedBy: req.adminId
       });
       
       return res.json(formatResponse(true, null, 'Number updated successfully'));
@@ -1117,30 +1187,25 @@ app.post('/api/admin/numbers/update', async (req, res) => {
 });
 
 // SAVE PRICING SETTINGS (ADMIN ONLY) - POST
-app.post('/api/admin/settings/pricing', async (req, res) => {
+app.post('/api/admin/settings/pricing', verifyAdmin, async (req, res) => {
   try {
-    const { adminId, settings } = req.body;
+    const { settings } = req.body;
     
-    if (!adminId || !settings) {
+    if (!settings) {
       return res.status(400).json(formatResponse(false, null, 'Invalid request'));
     }
     
-    console.log(`Save pricing settings by admin: ${adminId}`);
+    console.log(`Save pricing settings by admin: ${req.adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      const adminDoc = await db.collection('users').doc(adminId).get();
-      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
-        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
-      }
-      
       await db.collection('settings').doc('pricing').set({
         ...settings,
         updatedAt: new Date().toISOString(),
-        updatedBy: adminId
+        updatedBy: req.adminId
       });
       
       return res.json(formatResponse(true, null, 'Settings saved successfully'));
@@ -1151,57 +1216,6 @@ app.post('/api/admin/settings/pricing', async (req, res) => {
     
   } catch (error) {
     console.error('Save pricing settings error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// ===========================================
-// ADMIN DASHBOARD ENDPOINT (FULL DATA)
-// ===========================================
-app.post('/api/admin/dashboard', async (req, res) => {
-  try {
-    const { adminId } = req.body;
-    
-    if (!adminId) {
-      return res.status(400).json(formatResponse(false, null, 'adminId required'));
-    }
-    
-    console.log(`Get admin dashboard data for: ${adminId}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      const adminDoc = await db.collection('users').doc(adminId).get();
-      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
-        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
-      }
-      
-      const usersSnapshot = await db.collection('users').get();
-      const numbersSnapshot = await db.collection('numbers').get();
-      
-      let availableCount = 0;
-      let soldCount = 0;
-      
-      numbersSnapshot.forEach(doc => {
-        const data = doc.data();
-        if (data.status === 'available') availableCount++;
-        else if (data.status === 'sold') soldCount++;
-      });
-      
-      return res.json(formatResponse(true, {
-        totalUsers: usersSnapshot.size,
-        availableNumbers: availableCount,
-        soldNumbers: soldCount
-      }));
-    } catch (firebaseError) {
-      console.error('Firebase dashboard error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Admin dashboard error:', error);
     return res.status(500).json(formatResponse(false, null, error.message));
   }
 });
@@ -1225,30 +1239,35 @@ app.get('/api/health', (req, res) => {
 // ===========================================
 app.get('/', (req, res) => {
   res.json(formatResponse(true, { 
-    message: 'US SMS API is running',
+    message: 'US SMS API is running - Complete with Admin Auth',
     version: '1.0.0',
     mode: 'firebase-rest-api',
     endpoints: [
       '/api/health',
       '/api/auth/login',
       '/api/auth/signup',
+      '/api/admin/login (env based)',
       '/api/user/:uid',
       '/api/numbers/available',
       '/api/settings/pricing (public)',
-      '/api/admin/stats',
-      '/api/admin/users',
-      '/api/admin/numbers',
-      '/api/admin/numbers/upload',
-      '/api/admin/numbers/delete',
-      '/api/admin/numbers/delete-sold',
-      '/api/admin/numbers/update',
-      '/api/admin/settings/pricing'
+      '/api/admin/dashboard (protected)',
+      '/api/admin/stats (protected)',
+      '/api/admin/users (protected)',
+      '/api/admin/users/search (protected)',
+      '/api/admin/numbers (protected)',
+      '/api/admin/numbers/upload (protected)',
+      '/api/admin/numbers/delete (protected)',
+      '/api/admin/numbers/delete-sold (protected)',
+      '/api/admin/numbers/update (protected)',
+      '/api/admin/users/update (protected)',
+      '/api/admin/users/delete (protected)',
+      '/api/admin/settings/pricing (protected)'
     ]
   }));
 });
 
 // ===========================================
-// 404 HANDLER
+// 404 HANDLER FOR UNDEFINED ROUTES
 // ===========================================
 app.all('/api/*', (req, res) => {
   res.status(404).json(formatResponse(false, null, `Cannot ${req.method} ${req.path}`));
