@@ -362,7 +362,7 @@ app.post('/api/user/numbers/delete', async (req, res) => {
 // 3. NUMBERS ENDPOINTS
 // ===========================================
 
-// GET AVAILABLE NUMBERS - GET (FIXED - with type filter)
+// GET AVAILABLE NUMBERS - GET
 app.get('/api/numbers/available', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
@@ -397,7 +397,6 @@ app.get('/api/numbers/available', async (req, res) => {
     } catch (firebaseError) {
       console.error('Firebase query error:', firebaseError);
       
-      // If index error, return empty array with message
       if (firebaseError.message && firebaseError.message.includes('FAILED_PRECONDITION')) {
         return res.status(200).json(formatResponse(true, [], 'Index building in progress. Please try again in a few minutes.'));
       }
@@ -806,7 +805,7 @@ app.get('/api/admin/users/search', async (req, res) => {
 });
 
 // ===========================================
-// GET ALL NUMBERS (ADMIN) - GET (FIXED)
+// GET ALL NUMBERS (ADMIN) - GET
 // ===========================================
 app.get('/api/admin/numbers', async (req, res) => {
   try {
@@ -825,12 +824,9 @@ app.get('/api/admin/numbers', async (req, res) => {
     try {
       let query = db.collection('numbers');
       
-      // Handle type filter (for ID Creation numbers)
       if (type === 'id') {
         query = query.where('type', '==', 'ID Creation');
-      } 
-      // Handle status filters
-      else if (filter === 'available') {
+      } else if (filter === 'available') {
         query = query.where('status', '==', 'available');
       } else if (filter === 'sold') {
         query = query.where('status', '==', 'sold');
@@ -850,7 +846,6 @@ app.get('/api/admin/numbers', async (req, res) => {
     } catch (firebaseError) {
       console.error('Firebase query error:', firebaseError);
       
-      // If index error, return empty array with message
       if (firebaseError.message && firebaseError.message.includes('FAILED_PRECONDITION')) {
         return res.status(200).json(formatResponse(true, [], 'Index building in progress. Please try again in a few minutes.'));
       }
@@ -1136,7 +1131,9 @@ app.post('/api/admin/numbers/update', async (req, res) => {
   }
 });
 
+// ===========================================
 // SAVE PRICING SETTINGS (ADMIN ONLY) - POST
+// ===========================================
 app.post('/api/admin/settings/pricing', async (req, res) => {
   try {
     const { adminId, settings } = req.body;
@@ -1152,8 +1149,25 @@ app.post('/api/admin/settings/pricing', async (req, res) => {
     }
     
     try {
+      // Validate packages - only allow 10, 15, 30
+      const validPackages = {};
+      const allowedKeys = ['package10', 'package15', 'package30'];
+      
+      if (settings.packages) {
+        Object.keys(settings.packages).forEach(key => {
+          if (allowedKeys.includes(key)) {
+            validPackages[key] = settings.packages[key];
+          }
+        });
+      }
+      
+      const finalSettings = {
+        regularPrice: settings.regularPrice || 50,
+        packages: validPackages
+      };
+      
       await db.collection('settings').doc('pricing').set({
-        ...settings,
+        ...finalSettings,
         updatedAt: new Date().toISOString(),
         updatedBy: adminId
       });
