@@ -76,12 +76,21 @@ const formatResponse = (success, data, message = '') => ({
 // ===========================================
 // DEFAULT PRICING SETTINGS (US SMS - PKR)
 // ===========================================
-const defaultPricingSettings = {
+const defaultVerificationPackages = {
   regularPrice: 50,
   packages: {
-    package10: { price: 450, perNumber: 45, save: 50, discount: "-10%" },
-    package15: { price: 650, perNumber: 43.33, save: 100, discount: "-13%" },
-    package30: { price: 1200, perNumber: 40, save: 300, discount: "-20%" }
+    package10: { price: 450, perNumber: 45, save: 50 },
+    package15: { price: 650, perNumber: 43.33, save: 100 },
+    package30: { price: 1200, perNumber: 40, save: 300 }
+  }
+};
+
+const defaultIdCreationPackages = {
+  regularPrice: 50,
+  packages: {
+    package10: { price: 500, perNumber: 50, save: 0 },
+    package15: { price: 700, perNumber: 46.67, save: 50 },
+    package30: { price: 1300, perNumber: 43.33, save: 200 }
   }
 };
 
@@ -587,11 +596,30 @@ app.get('/api/settings/pricing', async (req, res) => {
       
       if (!settingsDoc.exists) {
         console.log('No settings found, returning defaults');
-        return res.json(formatResponse(true, defaultPricingSettings));
+        return res.json(formatResponse(true, {
+          verification: defaultVerificationPackages,
+          idCreation: defaultIdCreationPackages
+        }));
       }
       
       console.log('Settings found, returning from database');
-      return res.json(formatResponse(true, settingsDoc.data()));
+      const data = settingsDoc.data();
+      
+      // If old format, convert to new format
+      if (data.packages && !data.verification) {
+        return res.json(formatResponse(true, {
+          verification: {
+            regularPrice: data.regularPrice || 50,
+            packages: data.packages
+          },
+          idCreation: {
+            regularPrice: data.regularPrice || 50,
+            packages: data.packages
+          }
+        }));
+      }
+      
+      return res.json(formatResponse(true, data));
     } catch (firebaseError) {
       console.error('Firebase read error:', firebaseError);
       return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
@@ -804,9 +832,7 @@ app.get('/api/admin/users/search', async (req, res) => {
   }
 });
 
-// ===========================================
 // GET ALL NUMBERS (ADMIN) - GET
-// ===========================================
 app.get('/api/admin/numbers', async (req, res) => {
   try {
     const { adminId, filter, type, limit = 50 } = req.query;
@@ -1149,22 +1175,48 @@ app.post('/api/admin/settings/pricing', async (req, res) => {
     }
     
     try {
-      // Validate packages - only allow 10, 15, 30
-      const validPackages = {};
+      // Validate and clean settings
+      const finalSettings = {
+        verification: {
+          regularPrice: settings.verification?.regularPrice || 50,
+          packages: {}
+        },
+        idCreation: {
+          regularPrice: settings.idCreation?.regularPrice || 50,
+          packages: {}
+        }
+      };
+      
+      // Only allow 10, 15, 30 packages
       const allowedKeys = ['package10', 'package15', 'package30'];
       
-      if (settings.packages) {
-        Object.keys(settings.packages).forEach(key => {
+      if (settings.verification?.packages) {
+        Object.keys(settings.verification.packages).forEach(key => {
           if (allowedKeys.includes(key)) {
-            validPackages[key] = settings.packages[key];
+            finalSettings.verification.packages[key] = settings.verification.packages[key];
           }
         });
       }
       
-      const finalSettings = {
-        regularPrice: settings.regularPrice || 50,
-        packages: validPackages
-      };
+      if (settings.idCreation?.packages) {
+        Object.keys(settings.idCreation.packages).forEach(key => {
+          if (allowedKeys.includes(key)) {
+            finalSettings.idCreation.packages[key] = settings.idCreation.packages[key];
+          }
+        });
+      }
+      
+      // If old format, convert
+      if (settings.packages && !settings.verification) {
+        finalSettings.verification.packages = {};
+        finalSettings.idCreation.packages = {};
+        Object.keys(settings.packages).forEach(key => {
+          if (allowedKeys.includes(key)) {
+            finalSettings.verification.packages[key] = settings.packages[key];
+            finalSettings.idCreation.packages[key] = settings.packages[key];
+          }
+        });
+      }
       
       await db.collection('settings').doc('pricing').set({
         ...finalSettings,
