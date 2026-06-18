@@ -74,15 +74,14 @@ const formatResponse = (success, data, message = '') => ({
 });
 
 // ===========================================
-// DEFAULT PRICING SETTINGS (US SMS)
+// DEFAULT PRICING SETTINGS (US SMS - PKR)
 // ===========================================
 const defaultPricingSettings = {
-  regularPrice: 0.50,
+  regularPrice: 50,
   packages: {
-    package10: { price: 4.50, perNumber: 0.45, save: 0.50, discount: "-10%" },
-    package30: { price: 12.00, perNumber: 0.40, save: 3.00, discount: "-20%" },
-    package50: { price: 17.50, perNumber: 0.35, save: 7.50, discount: "-30%" },
-    package100: { price: 30.00, perNumber: 0.30, save: 20.00, discount: "-40%" }
+    package10: { price: 450, perNumber: 45, save: 50, discount: "-10%" },
+    package15: { price: 650, perNumber: 43.33, save: 100, discount: "-13%" },
+    package30: { price: 1200, perNumber: 40, save: 300, discount: "-20%" }
   }
 };
 
@@ -367,20 +366,24 @@ app.post('/api/user/numbers/delete', async (req, res) => {
 app.get('/api/numbers/available', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
+    const type = req.query.type || 'all';
     
-    console.log(`Get available numbers, limit: ${limit}`);
+    console.log(`Get available numbers, limit: ${limit}, type: ${type}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      const numbersRef = db.collection('numbers');
-      const snapshot = await numbersRef
-        .where('status', '==', 'available')
-        .orderBy('addedAt', 'desc')
-        .limit(limit)
-        .get();
+      let numbersRef = db.collection('numbers');
+      let query = numbersRef.where('status', '==', 'available');
+      
+      if (type !== 'all') {
+        const typeLabel = type === 'id' ? 'ID Creation' : 'SMS';
+        query = query.where('type', '==', typeLabel);
+      }
+      
+      const snapshot = await query.orderBy('addedAt', 'desc').limit(limit).get();
       
       const numbers = [];
       snapshot.forEach(doc => {
@@ -443,7 +446,7 @@ app.post('/api/numbers/buy', async (req, res) => {
       }
       
       const userData = userDoc.data();
-      const numberPrice = price || numberData.price || 0.50;
+      const numberPrice = price || numberData.price || 50;
       
       if ((userData.credits || 0) < numberPrice) {
         return res.status(400).json(formatResponse(false, null, 'Insufficient credits'));
@@ -617,18 +620,15 @@ app.post('/api/admin/login', async (req, res) => {
     
     console.log(`Admin login attempt for: ${email}`);
     
-    // Get admin credentials from environment variables
     const validEmail = process.env.ADMIN_EMAIL;
     const validPassword = process.env.ADMIN_PASSWORD;
     const validToken = process.env.ADMIN_TOKEN;
     
-    // Check if environment variables are set
     if (!validEmail || !validPassword || !validToken) {
       console.error('❌ Admin credentials not set in environment variables');
       return res.status(500).json(formatResponse(false, null, 'Admin credentials not configured'));
     }
     
-    // Verify credentials
     if (email !== validEmail || password !== validPassword) {
       console.log(`❌ Admin login failed: Invalid credentials for ${email}`);
       return res.status(401).json(formatResponse(false, null, 'Invalid email or password'));
@@ -673,17 +673,25 @@ app.get('/api/admin/stats', async (req, res) => {
       
       let availableCount = 0;
       let soldCount = 0;
+      let idAvailableCount = 0;
       
       numbersSnapshot.forEach(doc => {
         const data = doc.data();
-        if (data.status === 'available') availableCount++;
-        else if (data.status === 'sold') soldCount++;
+        if (data.status === 'available') {
+          availableCount++;
+          if (data.type && data.type.toLowerCase().includes('id')) {
+            idAvailableCount++;
+          }
+        } else if (data.status === 'sold') {
+          soldCount++;
+        }
       });
       
       return res.json(formatResponse(true, {
         totalUsers: usersSnapshot.size,
         availableNumbers: availableCount,
-        soldNumbers: soldCount
+        soldNumbers: soldCount,
+        idAvailableNumbers: idAvailableCount
       }));
     } catch (firebaseError) {
       console.error('Firebase stats error:', firebaseError);
@@ -813,10 +821,12 @@ app.get('/api/admin/numbers', async (req, res) => {
     try {
       let numbersQuery = db.collection('numbers').orderBy('addedAt', 'desc');
       
-      if (filter !== 'all') {
-        numbersQuery = db.collection('numbers')
-          .where('status', '==', filter)
-          .orderBy('addedAt', 'desc');
+      if (filter === 'available') {
+        numbersQuery = db.collection('numbers').where('status', '==', 'available').orderBy('addedAt', 'desc');
+      } else if (filter === 'sold') {
+        numbersQuery = db.collection('numbers').where('status', '==', 'sold').orderBy('addedAt', 'desc');
+      } else if (filter === 'id') {
+        numbersQuery = db.collection('numbers').where('type', '==', 'ID Creation').orderBy('addedAt', 'desc');
       }
       
       const snapshot = await numbersQuery.limit(parseInt(limit)).get();
@@ -850,7 +860,7 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
       return res.status(400).json(formatResponse(false, null, 'Invalid request'));
     }
     
-    console.log(`Upload ${numbers.length} numbers by admin: ${adminId}`);
+    console.log(`Upload ${numbers.length} numbers by admin: ${adminId}, type: ${type}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
@@ -859,6 +869,7 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
     try {
       const batch = db.batch();
       let successCount = 0;
+      const typeLabel = type === 'ID Creation' ? 'ID Creation' : 'SMS';
       
       for (const item of numbers) {
         try {
@@ -889,8 +900,8 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
             phoneNumber,
             originalNumber: phoneNumber,
             apiUrl: apiUrl || `https://sms.ussms.com/api/${phoneNumber.replace(/\D/g, '')}`,
-            price: price || 0.50,
-            type: type || 'SMS',
+            price: price || 50,
+            type: typeLabel,
             status: 'available',
             addedAt: new Date().toISOString(),
             addedBy: adminId
@@ -904,7 +915,7 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
       
       if (successCount > 0) {
         await batch.commit();
-        return res.json(formatResponse(true, { added: successCount }, `Added ${successCount} numbers`));
+        return res.json(formatResponse(true, { added: successCount }, `Added ${successCount} ${typeLabel} numbers`));
       } else {
         return res.status(400).json(formatResponse(false, null, 'No valid numbers to upload'));
       }
@@ -1156,6 +1167,7 @@ app.get('/api/health', (req, res) => {
     firestore: !!db,
     auth: !!auth,
     service: 'US-SMS',
+    currency: 'PKR',
     timestamp: new Date().toISOString()
   }));
 });
@@ -1168,6 +1180,7 @@ app.get('/', (req, res) => {
     message: 'US SMS API is running',
     version: '1.0.0',
     service: 'US-SMS',
+    currency: 'PKR',
     endpoints: [
       '/api/health',
       '/api/auth/login',
