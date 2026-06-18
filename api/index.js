@@ -1,6 +1,6 @@
 // ===========================================
-// US SMS - COMPLETE BACKEND API
-// All endpoints with Admin Authentication
+// US SMS - COMPLETE BACKEND API (CORS FIXED)
+// All origins allowed for InfinityFree
 // ===========================================
 
 const express = require('express');
@@ -54,10 +54,20 @@ try {
 }
 
 // ===========================================
-// EXPRESS APP SETUP
+// EXPRESS APP SETUP WITH CORS FIX
 // ===========================================
 const app = express();
-app.use(cors());
+
+// ✅ CORS - Allow all origins (Fix for InfinityFree)
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'admin-token']
+}));
+
+// ✅ Handle preflight requests explicitly
+app.options('*', cors());
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -89,11 +99,9 @@ const defaultPricingSettings = {
 // ===========================================
 const verifyAdmin = async (req, res, next) => {
   try {
-    // Check admin token from headers, query, or body
     const adminToken = req.headers['admin-token'] || req.query.adminToken || req.body.adminToken;
     const adminId = req.query.adminId || req.body.adminId;
     
-    // Get valid admin token from environment
     const validAdminToken = process.env.ADMIN_TOKEN;
     
     if (!adminToken || adminToken !== validAdminToken) {
@@ -104,7 +112,6 @@ const verifyAdmin = async (req, res, next) => {
       return res.status(400).json(formatResponse(false, null, 'adminId required'));
     }
     
-    // Verify admin in database
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
@@ -145,7 +152,6 @@ app.post('/api/auth/signup', async (req, res) => {
     }
     
     try {
-      // Check if user already exists
       try {
         await auth.getUserByEmail(email);
         return res.status(400).json(formatResponse(false, null, 'User already exists'));
@@ -153,7 +159,6 @@ app.post('/api/auth/signup', async (req, res) => {
         console.log("User doesn't exist in Auth, creating...");
       }
       
-      // Create user in Firebase Auth
       const userRecord = await auth.createUser({
         uid: uid,
         email: email,
@@ -162,7 +167,6 @@ app.post('/api/auth/signup', async (req, res) => {
       });
       console.log("✅ Firebase Auth user created:", userRecord.uid);
       
-      // Create user data in Firestore
       const userData = {
         uid: uid,
         email,
@@ -192,7 +196,7 @@ app.post('/api/auth/signup', async (req, res) => {
   }
 });
 
-// LOGIN - POST (WITH FIREBASE REST API)
+// LOGIN - POST
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -208,14 +212,12 @@ app.post('/api/auth/login', async (req, res) => {
     }
     
     try {
-      // Firebase REST API se password verify karo
       const apiKey = process.env.FIREBASE_API_KEY;
       
       if (!apiKey) {
         return res.status(500).json(formatResponse(false, null, 'Firebase API key not configured'));
       }
       
-      // Call Firebase REST API to verify password
       const verifyResponse = await fetch(
         `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
         {
@@ -238,7 +240,6 @@ app.post('/api/auth/login', async (req, res) => {
       
       console.log(`✅ Password verified for: ${email}, UID: ${verifyData.localId}`);
       
-      // Get user from Firestore
       const usersRef = db.collection('users');
       const snapshot = await usersRef.where('email', '==', email).limit(1).get();
       
@@ -249,12 +250,10 @@ app.post('/api/auth/login', async (req, res) => {
       const userDoc = snapshot.docs[0];
       const userData = userDoc.data();
       
-      // Update last login
       await userDoc.ref.update({
         lastLogin: new Date().toISOString()
       });
       
-      // Create custom token for frontend
       const customToken = await auth.createCustomToken(userDoc.id);
       
       console.log(`✅ Login successful for: ${email}`);
@@ -283,20 +282,17 @@ app.post('/api/auth/login', async (req, res) => {
 // 2. ADMIN AUTH ENDPOINT (ENV BASED)
 // ===========================================
 
-// ADMIN LOGIN - POST (Using Environment Variables)
 app.post('/api/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     const adminToken = req.headers['admin-token'];
     
-    // Check admin token from environment
     const validAdminToken = process.env.ADMIN_TOKEN;
     
     if (!adminToken || adminToken !== validAdminToken) {
       return res.status(401).json(formatResponse(false, null, 'Invalid admin token'));
     }
     
-    // Check admin credentials from environment
     const adminEmail = process.env.ADMIN_EMAIL;
     const adminPassword = process.env.ADMIN_PASSWORD;
     
@@ -325,7 +321,6 @@ app.post('/api/admin/login', async (req, res) => {
 // 3. USER ENDPOINTS
 // ===========================================
 
-// GET USER DATA - GET
 app.get('/api/user/:uid', async (req, res) => {
   try {
     const { uid } = req.params;
@@ -365,7 +360,6 @@ app.get('/api/user/:uid', async (req, res) => {
   }
 });
 
-// GET USER NUMBERS - GET
 app.get('/api/user/:uid/numbers', async (req, res) => {
   try {
     const { uid } = req.params;
@@ -403,7 +397,6 @@ app.get('/api/user/:uid/numbers', async (req, res) => {
   }
 });
 
-// DELETE USER NUMBER - POST
 app.post('/api/user/numbers/delete', async (req, res) => {
   try {
     const { userId, numbers } = req.body;
@@ -428,11 +421,9 @@ app.post('/api/user/numbers/delete', async (req, res) => {
       
       const userData = userDoc.data();
       
-      // Remove from purchasedNumbers array
       const updatedPurchasedNumbers = (userData.purchasedNumbers || [])
         .filter(num => !numbers.includes(num));
       
-      // Remove from purchasedNumbersData array
       let updatedPurchasedNumbersData = userData.purchasedNumbersData || [];
       updatedPurchasedNumbersData = updatedPurchasedNumbersData
         .filter(item => !numbers.includes(item.phoneNumber));
@@ -458,7 +449,6 @@ app.post('/api/user/numbers/delete', async (req, res) => {
 // 4. NUMBERS ENDPOINTS
 // ===========================================
 
-// GET AVAILABLE NUMBERS - GET
 app.get('/api/numbers/available', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
@@ -501,7 +491,6 @@ app.get('/api/numbers/available', async (req, res) => {
   }
 });
 
-// BUY NUMBER - POST
 app.post('/api/numbers/buy', async (req, res) => {
   try {
     const { userId, numberId, price } = req.body;
@@ -554,7 +543,6 @@ app.post('/api/numbers/buy', async (req, res) => {
         price: numberPrice
       };
       
-      // Update number
       await numberRef.update({
         status: 'sold',
         soldTo: userId,
@@ -562,7 +550,6 @@ app.post('/api/numbers/buy', async (req, res) => {
         soldAt: new Date().toISOString()
       });
       
-      // Update user
       await userRef.update({
         credits: admin.firestore.FieldValue.increment(-numberPrice),
         purchasedNumbers: admin.firestore.FieldValue.arrayUnion(numberData.phoneNumber),
@@ -585,7 +572,6 @@ app.post('/api/numbers/buy', async (req, res) => {
   }
 });
 
-// BULK BUY - POST
 app.post('/api/numbers/bulk-buy', async (req, res) => {
   try {
     const { userId, quantity, totalPrice, numbers } = req.body;
@@ -614,7 +600,6 @@ app.post('/api/numbers/bulk-buy', async (req, res) => {
         return res.status(400).json(formatResponse(false, null, 'Insufficient credits'));
       }
       
-      // Prepare data
       const purchasedNumbersData = numbers.map(num => ({
         phoneNumber: num.phoneNumber,
         apiUrl: num.apiUrl,
@@ -627,10 +612,8 @@ app.post('/api/numbers/bulk-buy', async (req, res) => {
       
       const phoneNumbersList = numbers.map(num => num.phoneNumber);
       
-      // Use batch for atomic operation
       const batch = db.batch();
       
-      // Update each number
       numbers.forEach(num => {
         const numberRef = db.collection('numbers').doc(num.id);
         batch.update(numberRef, {
@@ -641,7 +624,6 @@ app.post('/api/numbers/bulk-buy', async (req, res) => {
         });
       });
       
-      // Update user
       batch.update(userRef, {
         credits: admin.firestore.FieldValue.increment(-totalPrice),
         purchasedNumbers: admin.firestore.FieldValue.arrayUnion(...phoneNumbersList),
@@ -668,10 +650,9 @@ app.post('/api/numbers/bulk-buy', async (req, res) => {
 });
 
 // ===========================================
-// 5. PUBLIC PRICING SETTINGS ENDPOINT
+// 5. PUBLIC PRICING SETTINGS
 // ===========================================
 
-// GET PRICING SETTINGS - PUBLIC
 app.get('/api/settings/pricing', async (req, res) => {
   try {
     console.log('Get pricing settings (public endpoint)');
@@ -702,10 +683,9 @@ app.get('/api/settings/pricing', async (req, res) => {
 });
 
 // ===========================================
-// 6. ADMIN ENDPOINTS (PROTECTED WITH verifyAdmin)
+// 6. ADMIN ENDPOINTS (PROTECTED)
 // ===========================================
 
-// ADMIN DASHBOARD - POST (Full Data)
 app.post('/api/admin/dashboard', verifyAdmin, async (req, res) => {
   try {
     console.log(`Get admin dashboard data for: ${req.adminId}`);
@@ -743,7 +723,6 @@ app.post('/api/admin/dashboard', verifyAdmin, async (req, res) => {
   }
 });
 
-// ADMIN STATS - GET
 app.get('/api/admin/stats', verifyAdmin, async (req, res) => {
   try {
     console.log(`Get admin stats for: ${req.adminId}`);
@@ -781,7 +760,6 @@ app.get('/api/admin/stats', verifyAdmin, async (req, res) => {
   }
 });
 
-// GET ALL USERS - GET
 app.get('/api/admin/users', verifyAdmin, async (req, res) => {
   try {
     const { limit = 50 } = req.query;
@@ -825,7 +803,6 @@ app.get('/api/admin/users', verifyAdmin, async (req, res) => {
   }
 });
 
-// SEARCH USER BY EMAIL - GET
 app.get('/api/admin/users/search', verifyAdmin, async (req, res) => {
   try {
     const { email } = req.query;
@@ -876,7 +853,6 @@ app.get('/api/admin/users/search', verifyAdmin, async (req, res) => {
   }
 });
 
-// GET ALL NUMBERS (ADMIN) - GET
 app.get('/api/admin/numbers', verifyAdmin, async (req, res) => {
   try {
     const { filter = 'all', limit = 50 } = req.query;
@@ -918,7 +894,6 @@ app.get('/api/admin/numbers', verifyAdmin, async (req, res) => {
   }
 });
 
-// UPLOAD NUMBERS - POST
 app.post('/api/admin/numbers/upload', verifyAdmin, async (req, res) => {
   try {
     const { numbers, price, type } = req.body;
@@ -996,7 +971,6 @@ app.post('/api/admin/numbers/upload', verifyAdmin, async (req, res) => {
   }
 });
 
-// DELETE NUMBERS (ADMIN) - POST
 app.post('/api/admin/numbers/delete', verifyAdmin, async (req, res) => {
   try {
     const { numberIds } = req.body;
@@ -1033,7 +1007,6 @@ app.post('/api/admin/numbers/delete', verifyAdmin, async (req, res) => {
   }
 });
 
-// DELETE ALL SOLD NUMBERS - POST
 app.post('/api/admin/numbers/delete-sold', verifyAdmin, async (req, res) => {
   try {
     console.log(`Delete all sold numbers by admin: ${req.adminId}`);
@@ -1068,7 +1041,6 @@ app.post('/api/admin/numbers/delete-sold', verifyAdmin, async (req, res) => {
   }
 });
 
-// UPDATE USER (ADMIN) - POST
 app.post('/api/admin/users/update', verifyAdmin, async (req, res) => {
   try {
     const { userId, updates } = req.body;
@@ -1102,7 +1074,6 @@ app.post('/api/admin/users/update', verifyAdmin, async (req, res) => {
   }
 });
 
-// DELETE USER (ADMIN) - POST
 app.post('/api/admin/users/delete', verifyAdmin, async (req, res) => {
   try {
     const { userId } = req.body;
@@ -1118,17 +1089,14 @@ app.post('/api/admin/users/delete', verifyAdmin, async (req, res) => {
     }
     
     try {
-      // First get user data to check if exists
       const userDoc = await db.collection('users').doc(userId).get();
       
       if (!userDoc.exists) {
         return res.status(404).json(formatResponse(false, null, 'User not found'));
       }
       
-      // Delete from Firestore
       await db.collection('users').doc(userId).delete();
       
-      // Try to delete from Firebase Auth (if available)
       if (auth) {
         try {
           await auth.deleteUser(userId);
@@ -1152,7 +1120,6 @@ app.post('/api/admin/users/delete', verifyAdmin, async (req, res) => {
   }
 });
 
-// UPDATE NUMBER (ADMIN) - POST
 app.post('/api/admin/numbers/update', verifyAdmin, async (req, res) => {
   try {
     const { numberId, updates } = req.body;
@@ -1186,7 +1153,6 @@ app.post('/api/admin/numbers/update', verifyAdmin, async (req, res) => {
   }
 });
 
-// SAVE PRICING SETTINGS (ADMIN ONLY) - POST
 app.post('/api/admin/settings/pricing', verifyAdmin, async (req, res) => {
   try {
     const { settings } = req.body;
@@ -1239,35 +1205,14 @@ app.get('/api/health', (req, res) => {
 // ===========================================
 app.get('/', (req, res) => {
   res.json(formatResponse(true, { 
-    message: 'US SMS API is running - Complete with Admin Auth',
+    message: 'US SMS API is running - CORS Fixed',
     version: '1.0.0',
-    mode: 'firebase-rest-api',
-    endpoints: [
-      '/api/health',
-      '/api/auth/login',
-      '/api/auth/signup',
-      '/api/admin/login (env based)',
-      '/api/user/:uid',
-      '/api/numbers/available',
-      '/api/settings/pricing (public)',
-      '/api/admin/dashboard (protected)',
-      '/api/admin/stats (protected)',
-      '/api/admin/users (protected)',
-      '/api/admin/users/search (protected)',
-      '/api/admin/numbers (protected)',
-      '/api/admin/numbers/upload (protected)',
-      '/api/admin/numbers/delete (protected)',
-      '/api/admin/numbers/delete-sold (protected)',
-      '/api/admin/numbers/update (protected)',
-      '/api/admin/users/update (protected)',
-      '/api/admin/users/delete (protected)',
-      '/api/admin/settings/pricing (protected)'
-    ]
+    mode: 'firebase-rest-api'
   }));
 });
 
 // ===========================================
-// 404 HANDLER FOR UNDEFINED ROUTES
+// 404 HANDLER
 // ===========================================
 app.all('/api/*', (req, res) => {
   res.status(404).json(formatResponse(false, null, `Cannot ${req.method} ${req.path}`));
