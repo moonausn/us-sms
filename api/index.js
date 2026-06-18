@@ -803,33 +803,40 @@ app.get('/api/admin/users/search', async (req, res) => {
   }
 });
 
-// GET ALL NUMBERS (ADMIN) - GET
+// ===========================================
+// GET ALL NUMBERS (ADMIN) - GET (FIXED)
+// ===========================================
 app.get('/api/admin/numbers', async (req, res) => {
   try {
-    const { adminId, filter = 'all', limit = 50 } = req.query;
+    const { adminId, filter = 'all', type, limit = 50 } = req.query;
     
     if (!adminId) {
       return res.status(400).json(formatResponse(false, null, 'adminId required'));
     }
     
-    console.log(`Get admin numbers, filter: ${filter}, limit: ${limit}`);
+    console.log(`Get admin numbers, filter: ${filter}, type: ${type}, limit: ${limit}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      let numbersQuery = db.collection('numbers').orderBy('addedAt', 'desc');
+      let numbersQuery = db.collection('numbers');
+      let query = numbersQuery.orderBy('addedAt', 'desc');
       
-      if (filter === 'available') {
-        numbersQuery = db.collection('numbers').where('status', '==', 'available').orderBy('addedAt', 'desc');
+      // Handle type filter (for ID Creation numbers)
+      if (type === 'id') {
+        query = numbersQuery.where('type', '==', 'ID Creation').orderBy('addedAt', 'desc');
+      } 
+      // Handle status filters
+      else if (filter === 'available') {
+        query = numbersQuery.where('status', '==', 'available').orderBy('addedAt', 'desc');
       } else if (filter === 'sold') {
-        numbersQuery = db.collection('numbers').where('status', '==', 'sold').orderBy('addedAt', 'desc');
-      } else if (filter === 'id') {
-        numbersQuery = db.collection('numbers').where('type', '==', 'ID Creation').orderBy('addedAt', 'desc');
+        query = numbersQuery.where('status', '==', 'sold').orderBy('addedAt', 'desc');
       }
+      // 'all' ke liye kuch nahi karna, sab numbers aayenge
       
-      const snapshot = await numbersQuery.limit(parseInt(limit)).get();
+      const snapshot = await query.limit(parseInt(limit)).get();
       
       const numbers = [];
       snapshot.forEach(doc => {
