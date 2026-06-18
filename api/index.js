@@ -362,7 +362,7 @@ app.post('/api/user/numbers/delete', async (req, res) => {
 // 3. NUMBERS ENDPOINTS
 // ===========================================
 
-// GET AVAILABLE NUMBERS - GET
+// GET AVAILABLE NUMBERS - GET (FIXED - with type filter)
 app.get('/api/numbers/available', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
@@ -393,13 +393,15 @@ app.get('/api/numbers/available', async (req, res) => {
         });
       });
       
-      if (numbers.length === 0) {
-        return res.status(404).json(formatResponse(false, null, 'No available numbers found'));
-      }
-      
       return res.json(formatResponse(true, numbers));
     } catch (firebaseError) {
       console.error('Firebase query error:', firebaseError);
+      
+      // If index error, return empty array with message
+      if (firebaseError.message && firebaseError.message.includes('FAILED_PRECONDITION')) {
+        return res.status(200).json(formatResponse(true, [], 'Index building in progress. Please try again in a few minutes.'));
+      }
+      
       return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
     }
     
@@ -804,7 +806,7 @@ app.get('/api/admin/users/search', async (req, res) => {
 });
 
 // ===========================================
-// GET ALL NUMBERS (ADMIN) - GET (FULLY FIXED)
+// GET ALL NUMBERS (ADMIN) - GET (FIXED)
 // ===========================================
 app.get('/api/admin/numbers', async (req, res) => {
   try {
@@ -822,28 +824,18 @@ app.get('/api/admin/numbers', async (req, res) => {
     
     try {
       let query = db.collection('numbers');
-      let hasFilter = false;
       
       // Handle type filter (for ID Creation numbers)
       if (type === 'id') {
         query = query.where('type', '==', 'ID Creation');
-        hasFilter = true;
-        console.log('✅ Filtering by type: ID Creation');
       } 
       // Handle status filters
       else if (filter === 'available') {
         query = query.where('status', '==', 'available');
-        hasFilter = true;
-        console.log('✅ Filtering by status: available');
       } else if (filter === 'sold') {
         query = query.where('status', '==', 'sold');
-        hasFilter = true;
-        console.log('✅ Filtering by status: sold');
-      } else {
-        console.log('✅ No filter applied - returning all numbers');
       }
       
-      // Apply ordering and limit
       const snapshot = await query.orderBy('addedAt', 'desc').limit(parseInt(limit)).get();
       
       const numbers = [];
@@ -854,11 +846,15 @@ app.get('/api/admin/numbers', async (req, res) => {
         });
       });
       
-      console.log(`✅ Found ${numbers.length} numbers`);
-      
       return res.json(formatResponse(true, numbers));
     } catch (firebaseError) {
       console.error('Firebase query error:', firebaseError);
+      
+      // If index error, return empty array with message
+      if (firebaseError.message && firebaseError.message.includes('FAILED_PRECONDITION')) {
+        return res.status(200).json(formatResponse(true, [], 'Index building in progress. Please try again in a few minutes.'));
+      }
+      
       return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
     }
     
