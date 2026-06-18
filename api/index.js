@@ -1,6 +1,5 @@
 // ===========================================
-// US SMS - COMPLETE BACKEND API (CORS FIXED)
-// All origins allowed for InfinityFree
+// US SMS - BACKEND API (VERCEL + FIREBASE)
 // ===========================================
 
 const express = require('express');
@@ -54,20 +53,10 @@ try {
 }
 
 // ===========================================
-// EXPRESS APP SETUP WITH CORS FIX
+// EXPRESS APP SETUP
 // ===========================================
 const app = express();
-
-// ✅ CORS - Allow all origins (Fix for InfinityFree)
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'admin-token']
-}));
-
-// ✅ Handle preflight requests explicitly
-app.options('*', cors());
-
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -82,53 +71,15 @@ const formatResponse = (success, data, message = '') => ({
 });
 
 // ===========================================
-// DEFAULT PRICING SETTINGS
+// DEFAULT BULK BUY SETTINGS (US SMS)
 // ===========================================
-const defaultPricingSettings = {
-  regularPrice: 0.50,
+const defaultBulkBuySettings = {
+  regularPrice: 0.35,
   packages: {
-    package5: { price: 2.00, perNumber: 0.40, save: 0.50, discount: "-20%" },
-    package15: { price: 5.25, perNumber: 0.35, save: 2.25, discount: "-30%" },
-    package30: { price: 9.00, perNumber: 0.30, save: 6.00, discount: "-40%" },
-    package50: { price: 12.50, perNumber: 0.25, save: 12.50, discount: "-50%" }
-  }
-};
-
-// ===========================================
-// ADMIN AUTH MIDDLEWARE
-// ===========================================
-const verifyAdmin = async (req, res, next) => {
-  try {
-    const adminToken = req.headers['admin-token'] || req.query.adminToken || req.body.adminToken;
-    const adminId = req.query.adminId || req.body.adminId;
-    
-    const validAdminToken = process.env.ADMIN_TOKEN;
-    
-    if (!adminToken || adminToken !== validAdminToken) {
-      return res.status(401).json(formatResponse(false, null, 'Invalid admin token'));
-    }
-    
-    if (!adminId) {
-      return res.status(400).json(formatResponse(false, null, 'adminId required'));
-    }
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    const adminDoc = await db.collection('users').doc(adminId).get();
-    
-    if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
-      return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
-    }
-    
-    req.adminData = adminDoc.data();
-    req.adminId = adminId;
-    next();
-    
-  } catch (error) {
-    console.error('Admin verification error:', error);
-    return res.status(500).json(formatResponse(false, null, 'Authentication error: ' + error.message));
+    package10: { price: 3.00, perNumber: 0.30, save: 0.50, discount: "-14%" },
+    package30: { price: 8.00, perNumber: 0.267, save: 2.50, discount: "-24%" },
+    package50: { price: 12.00, perNumber: 0.24, save: 5.50, discount: "-31%" },
+    package100: { price: 21.00, perNumber: 0.21, save: 14.00, discount: "-40%" }
   }
 };
 
@@ -279,48 +230,10 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // ===========================================
-// 2. ADMIN AUTH ENDPOINT (ENV BASED)
+// 2. USER ENDPOINTS
 // ===========================================
 
-app.post('/api/admin/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const adminToken = req.headers['admin-token'];
-    
-    const validAdminToken = process.env.ADMIN_TOKEN;
-    
-    if (!adminToken || adminToken !== validAdminToken) {
-      return res.status(401).json(formatResponse(false, null, 'Invalid admin token'));
-    }
-    
-    const adminEmail = process.env.ADMIN_EMAIL;
-    const adminPassword = process.env.ADMIN_PASSWORD;
-    
-    if (!email || !password) {
-      return res.status(400).json(formatResponse(false, null, 'Email and password required'));
-    }
-    
-    if (email !== adminEmail || password !== adminPassword) {
-      return res.status(401).json(formatResponse(false, null, 'Invalid admin credentials'));
-    }
-    
-    console.log(`✅ Admin login successful: ${email}`);
-    
-    return res.json(formatResponse(true, {
-      adminEmail: email,
-      role: 'admin'
-    }, 'Admin login successful'));
-    
-  } catch (error) {
-    console.error('Admin login error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// ===========================================
-// 3. USER ENDPOINTS
-// ===========================================
-
+// GET USER DATA - GET
 app.get('/api/user/:uid', async (req, res) => {
   try {
     const { uid } = req.params;
@@ -360,6 +273,7 @@ app.get('/api/user/:uid', async (req, res) => {
   }
 });
 
+// GET USER NUMBERS - GET
 app.get('/api/user/:uid/numbers', async (req, res) => {
   try {
     const { uid } = req.params;
@@ -397,6 +311,7 @@ app.get('/api/user/:uid/numbers', async (req, res) => {
   }
 });
 
+// DELETE USER NUMBER - POST
 app.post('/api/user/numbers/delete', async (req, res) => {
   try {
     const { userId, numbers } = req.body;
@@ -446,9 +361,10 @@ app.post('/api/user/numbers/delete', async (req, res) => {
 });
 
 // ===========================================
-// 4. NUMBERS ENDPOINTS
+// 3. NUMBERS ENDPOINTS
 // ===========================================
 
+// GET AVAILABLE NUMBERS - GET
 app.get('/api/numbers/available', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
@@ -491,6 +407,7 @@ app.get('/api/numbers/available', async (req, res) => {
   }
 });
 
+// BUY NUMBER - POST
 app.post('/api/numbers/buy', async (req, res) => {
   try {
     const { userId, numberId, price } = req.body;
@@ -527,7 +444,7 @@ app.post('/api/numbers/buy', async (req, res) => {
       }
       
       const userData = userDoc.data();
-      const numberPrice = price || numberData.price || 0.50;
+      const numberPrice = price || numberData.price || 0.35;
       
       if ((userData.credits || 0) < numberPrice) {
         return res.status(400).json(formatResponse(false, null, 'Insufficient credits'));
@@ -572,6 +489,7 @@ app.post('/api/numbers/buy', async (req, res) => {
   }
 });
 
+// BULK BUY - POST
 app.post('/api/numbers/bulk-buy', async (req, res) => {
   try {
     const { userId, quantity, totalPrice, numbers } = req.body;
@@ -650,23 +568,23 @@ app.post('/api/numbers/bulk-buy', async (req, res) => {
 });
 
 // ===========================================
-// 5. PUBLIC PRICING SETTINGS
+// 4. PUBLIC BULK BUY SETTINGS ENDPOINT
 // ===========================================
 
-app.get('/api/settings/pricing', async (req, res) => {
+app.get('/api/settings/bulk-buy', async (req, res) => {
   try {
-    console.log('Get pricing settings (public endpoint)');
+    console.log('Get bulk buy settings (public endpoint)');
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      const settingsDoc = await db.collection('settings').doc('pricing').get();
+      const settingsDoc = await db.collection('settings').doc('bulkBuy').get();
       
       if (!settingsDoc.exists) {
         console.log('No settings found, returning defaults');
-        return res.json(formatResponse(true, defaultPricingSettings));
+        return res.json(formatResponse(true, defaultBulkBuySettings));
       }
       
       console.log('Settings found, returning from database');
@@ -677,61 +595,36 @@ app.get('/api/settings/pricing', async (req, res) => {
     }
     
   } catch (error) {
-    console.error('Get pricing settings error:', error);
+    console.error('Get bulk buy settings error:', error);
     return res.status(500).json(formatResponse(false, null, error.message));
   }
 });
 
 // ===========================================
-// 6. ADMIN ENDPOINTS (PROTECTED)
+// 5. ADMIN ENDPOINTS
 // ===========================================
 
-app.post('/api/admin/dashboard', verifyAdmin, async (req, res) => {
+// ADMIN STATS - GET
+app.get('/api/admin/stats', async (req, res) => {
   try {
-    console.log(`Get admin dashboard data for: ${req.adminId}`);
+    const { adminId } = req.query;
+    
+    if (!adminId) {
+      return res.status(400).json(formatResponse(false, null, 'adminId required'));
+    }
+    
+    console.log(`Get admin stats for: ${adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      const usersSnapshot = await db.collection('users').get();
-      const numbersSnapshot = await db.collection('numbers').get();
+      const adminDoc = await db.collection('users').doc(adminId).get();
+      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
+        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
+      }
       
-      let availableCount = 0;
-      let soldCount = 0;
-      
-      numbersSnapshot.forEach(doc => {
-        const data = doc.data();
-        if (data.status === 'available') availableCount++;
-        else if (data.status === 'sold') soldCount++;
-      });
-      
-      return res.json(formatResponse(true, {
-        totalUsers: usersSnapshot.size,
-        availableNumbers: availableCount,
-        soldNumbers: soldCount
-      }));
-    } catch (firebaseError) {
-      console.error('Firebase dashboard error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Admin dashboard error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-app.get('/api/admin/stats', verifyAdmin, async (req, res) => {
-  try {
-    console.log(`Get admin stats for: ${req.adminId}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
       const usersSnapshot = await db.collection('users').get();
       const numbersSnapshot = await db.collection('numbers').get();
       
@@ -760,17 +653,27 @@ app.get('/api/admin/stats', verifyAdmin, async (req, res) => {
   }
 });
 
-app.get('/api/admin/users', verifyAdmin, async (req, res) => {
+// GET ALL USERS - GET
+app.get('/api/admin/users', async (req, res) => {
   try {
-    const { limit = 50 } = req.query;
+    const { adminId, limit = 50 } = req.query;
     
-    console.log(`Get users for admin: ${req.adminId}, limit: ${limit}`);
+    if (!adminId) {
+      return res.status(400).json(formatResponse(false, null, 'adminId required'));
+    }
+    
+    console.log(`Get users for admin: ${adminId}, limit: ${limit}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
+      const adminDoc = await db.collection('users').doc(adminId).get();
+      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
+        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
+      }
+      
       let query = db.collection('users').orderBy('createdAt', 'desc');
       const snapshot = await query.limit(parseInt(limit)).get();
       
@@ -803,12 +706,13 @@ app.get('/api/admin/users', verifyAdmin, async (req, res) => {
   }
 });
 
-app.get('/api/admin/users/search', verifyAdmin, async (req, res) => {
+// SEARCH USER BY EMAIL - GET
+app.get('/api/admin/users/search', async (req, res) => {
   try {
-    const { email } = req.query;
+    const { adminId, email } = req.query;
     
-    if (!email) {
-      return res.status(400).json(formatResponse(false, null, 'email required'));
+    if (!adminId || !email) {
+      return res.status(400).json(formatResponse(false, null, 'adminId and email required'));
     }
     
     console.log(`Search user by email: ${email}`);
@@ -818,6 +722,11 @@ app.get('/api/admin/users/search', verifyAdmin, async (req, res) => {
     }
     
     try {
+      const adminDoc = await db.collection('users').doc(adminId).get();
+      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
+        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
+      }
+      
       const snapshot = await db.collection('users')
         .where('email', '==', email.toLowerCase())
         .limit(1)
@@ -853,9 +762,14 @@ app.get('/api/admin/users/search', verifyAdmin, async (req, res) => {
   }
 });
 
-app.get('/api/admin/numbers', verifyAdmin, async (req, res) => {
+// GET ALL NUMBERS (ADMIN) - GET
+app.get('/api/admin/numbers', async (req, res) => {
   try {
-    const { filter = 'all', limit = 50 } = req.query;
+    const { adminId, filter = 'all', limit = 50 } = req.query;
+    
+    if (!adminId) {
+      return res.status(400).json(formatResponse(false, null, 'adminId required'));
+    }
     
     console.log(`Get admin numbers, filter: ${filter}, limit: ${limit}`);
     
@@ -864,6 +778,11 @@ app.get('/api/admin/numbers', verifyAdmin, async (req, res) => {
     }
     
     try {
+      const adminDoc = await db.collection('users').doc(adminId).get();
+      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
+        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
+      }
+      
       let numbersQuery = db.collection('numbers').orderBy('addedAt', 'desc');
       
       if (filter !== 'all') {
@@ -894,21 +813,27 @@ app.get('/api/admin/numbers', verifyAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/admin/numbers/upload', verifyAdmin, async (req, res) => {
+// UPLOAD NUMBERS - POST
+app.post('/api/admin/numbers/upload', async (req, res) => {
   try {
-    const { numbers, price, type } = req.body;
+    const { adminId, numbers, price, type } = req.body;
     
-    if (!numbers || !numbers.length) {
+    if (!adminId || !numbers || !numbers.length) {
       return res.status(400).json(formatResponse(false, null, 'Invalid request'));
     }
     
-    console.log(`Upload ${numbers.length} numbers by admin: ${req.adminId}`);
+    console.log(`Upload ${numbers.length} numbers by admin: ${adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
+      const adminDoc = await db.collection('users').doc(adminId).get();
+      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
+        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
+      }
+      
       const batch = db.batch();
       let successCount = 0;
       
@@ -940,12 +865,12 @@ app.post('/api/admin/numbers/upload', verifyAdmin, async (req, res) => {
           batch.set(numberRef, {
             phoneNumber,
             originalNumber: phoneNumber,
-            apiUrl: apiUrl || `https://sms.example.com/api/${phoneNumber.replace(/\D/g, '')}`,
-            price: price || 0.50,
+            apiUrl: apiUrl || `https://sms.ussms.com/api/${phoneNumber.replace(/\D/g, '')}`,
+            price: price || 0.35,
             type: type || 'SMS',
             status: 'available',
             addedAt: new Date().toISOString(),
-            addedBy: req.adminId
+            addedBy: adminId
           });
           
           successCount++;
@@ -971,21 +896,27 @@ app.post('/api/admin/numbers/upload', verifyAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/admin/numbers/delete', verifyAdmin, async (req, res) => {
+// DELETE NUMBERS (ADMIN) - POST
+app.post('/api/admin/numbers/delete', async (req, res) => {
   try {
-    const { numberIds } = req.body;
+    const { adminId, numberIds } = req.body;
     
-    if (!numberIds || !numberIds.length) {
+    if (!adminId || !numberIds || !numberIds.length) {
       return res.status(400).json(formatResponse(false, null, 'Invalid request'));
     }
     
-    console.log(`Delete ${numberIds.length} numbers by admin: ${req.adminId}`);
+    console.log(`Delete ${numberIds.length} numbers by admin: ${adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
+      const adminDoc = await db.collection('users').doc(adminId).get();
+      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
+        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
+      }
+      
       const batch = db.batch();
       
       numberIds.forEach(id => {
@@ -1007,15 +938,27 @@ app.post('/api/admin/numbers/delete', verifyAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/admin/numbers/delete-sold', verifyAdmin, async (req, res) => {
+// DELETE ALL SOLD NUMBERS - POST
+app.post('/api/admin/numbers/delete-sold', async (req, res) => {
   try {
-    console.log(`Delete all sold numbers by admin: ${req.adminId}`);
+    const { adminId } = req.body;
+    
+    if (!adminId) {
+      return res.status(400).json(formatResponse(false, null, 'adminId required'));
+    }
+    
+    console.log(`Delete all sold numbers by admin: ${adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
+      const adminDoc = await db.collection('users').doc(adminId).get();
+      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
+        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
+      }
+      
       const snapshot = await db.collection('numbers')
         .where('status', '==', 'sold')
         .limit(100)
@@ -1041,25 +984,31 @@ app.post('/api/admin/numbers/delete-sold', verifyAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/admin/users/update', verifyAdmin, async (req, res) => {
+// UPDATE USER (ADMIN) - POST
+app.post('/api/admin/users/update', async (req, res) => {
   try {
-    const { userId, updates } = req.body;
+    const { adminId, userId, updates } = req.body;
     
-    if (!userId || !updates) {
+    if (!adminId || !userId || !updates) {
       return res.status(400).json(formatResponse(false, null, 'Invalid request'));
     }
     
-    console.log(`Update user ${userId} by admin: ${req.adminId}`);
+    console.log(`Update user ${userId} by admin: ${adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
+      const adminDoc = await db.collection('users').doc(adminId).get();
+      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
+        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
+      }
+      
       await db.collection('users').doc(userId).update({
         ...updates,
         updatedAt: new Date().toISOString(),
-        updatedBy: req.adminId
+        updatedBy: adminId
       });
       
       return res.json(formatResponse(true, null, 'User updated successfully'));
@@ -1074,21 +1023,27 @@ app.post('/api/admin/users/update', verifyAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/admin/users/delete', verifyAdmin, async (req, res) => {
+// DELETE USER (ADMIN) - POST
+app.post('/api/admin/users/delete', async (req, res) => {
   try {
-    const { userId } = req.body;
+    const { adminId, userId } = req.body;
     
-    if (!userId) {
+    if (!adminId || !userId) {
       return res.status(400).json(formatResponse(false, null, 'Invalid request'));
     }
     
-    console.log(`Delete user ${userId} by admin: ${req.adminId}`);
+    console.log(`Delete user ${userId} by admin: ${adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
+      const adminDoc = await db.collection('users').doc(adminId).get();
+      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
+        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
+      }
+      
       const userDoc = await db.collection('users').doc(userId).get();
       
       if (!userDoc.exists) {
@@ -1120,25 +1075,31 @@ app.post('/api/admin/users/delete', verifyAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/admin/numbers/update', verifyAdmin, async (req, res) => {
+// UPDATE NUMBER (ADMIN) - POST
+app.post('/api/admin/numbers/update', async (req, res) => {
   try {
-    const { numberId, updates } = req.body;
+    const { adminId, numberId, updates } = req.body;
     
-    if (!numberId || !updates) {
+    if (!adminId || !numberId || !updates) {
       return res.status(400).json(formatResponse(false, null, 'Invalid request'));
     }
     
-    console.log(`Update number ${numberId} by admin: ${req.adminId}`);
+    console.log(`Update number ${numberId} by admin: ${adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
+      const adminDoc = await db.collection('users').doc(adminId).get();
+      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
+        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
+      }
+      
       await db.collection('numbers').doc(numberId).update({
         ...updates,
         updatedAt: new Date().toISOString(),
-        updatedBy: req.adminId
+        updatedBy: adminId
       });
       
       return res.json(formatResponse(true, null, 'Number updated successfully'));
@@ -1153,25 +1114,31 @@ app.post('/api/admin/numbers/update', verifyAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/admin/settings/pricing', verifyAdmin, async (req, res) => {
+// SAVE BULK BUY SETTINGS (ADMIN ONLY) - POST
+app.post('/api/admin/settings/bulk-buy', async (req, res) => {
   try {
-    const { settings } = req.body;
+    const { adminId, settings } = req.body;
     
-    if (!settings) {
+    if (!adminId || !settings) {
       return res.status(400).json(formatResponse(false, null, 'Invalid request'));
     }
     
-    console.log(`Save pricing settings by admin: ${req.adminId}`);
+    console.log(`Save bulk buy settings by admin: ${adminId}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      await db.collection('settings').doc('pricing').set({
+      const adminDoc = await db.collection('users').doc(adminId).get();
+      if (!adminDoc.exists || adminDoc.data().role !== 'admin') {
+        return res.status(403).json(formatResponse(false, null, 'Unauthorized: Admin access required'));
+      }
+      
+      await db.collection('settings').doc('bulkBuy').set({
         ...settings,
         updatedAt: new Date().toISOString(),
-        updatedBy: req.adminId
+        updatedBy: adminId
       });
       
       return res.json(formatResponse(true, null, 'Settings saved successfully'));
@@ -1181,7 +1148,80 @@ app.post('/api/admin/settings/pricing', verifyAdmin, async (req, res) => {
     }
     
   } catch (error) {
-    console.error('Save pricing settings error:', error);
+    console.error('Save bulk buy settings error:', error);
+    return res.status(500).json(formatResponse(false, null, error.message));
+  }
+});
+
+// ===========================================
+// ADMIN LOGIN - POST
+// ===========================================
+app.post('/api/admin/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const adminToken = req.headers['admin-token'];
+    
+    if (!email || !password || !adminToken) {
+      return res.status(400).json(formatResponse(false, null, 'Email, password and admin token required'));
+    }
+    
+    console.log(`Admin login attempt for: ${email}`);
+    
+    if (!db) {
+      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
+    }
+    
+    try {
+      const apiKey = process.env.FIREBASE_API_KEY;
+      
+      if (!apiKey) {
+        return res.status(500).json(formatResponse(false, null, 'Firebase API key not configured'));
+      }
+      
+      const verifyResponse = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email,
+            password,
+            returnSecureToken: true
+          })
+        }
+      );
+      
+      const verifyData = await verifyResponse.json();
+      
+      if (!verifyResponse.ok) {
+        return res.status(401).json(formatResponse(false, null, 'Invalid email or password'));
+      }
+      
+      const userSnapshot = await db.collection('users')
+        .where('email', '==', email)
+        .where('role', '==', 'admin')
+        .limit(1)
+        .get();
+      
+      if (userSnapshot.empty) {
+        return res.status(403).json(formatResponse(false, null, 'Access denied: Not an admin'));
+      }
+      
+      const userDoc = userSnapshot.docs[0];
+      const userData = userDoc.data();
+      
+      return res.json(formatResponse(true, {
+        adminEmail: userData.email,
+        adminUid: userDoc.id
+      }, 'Admin login successful'));
+      
+    } catch (firebaseError) {
+      console.error('Firebase error:', firebaseError);
+      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
+    }
+    
+  } catch (error) {
+    console.error('Admin login error:', error);
     return res.status(500).json(formatResponse(false, null, error.message));
   }
 });
@@ -1195,7 +1235,7 @@ app.get('/api/health', (req, res) => {
     firebase: !!firebaseApp,
     firestore: !!db,
     auth: !!auth,
-    mode: 'firebase-rest-api',
+    service: 'US-SMS',
     timestamp: new Date().toISOString()
   }));
 });
@@ -1205,9 +1245,20 @@ app.get('/api/health', (req, res) => {
 // ===========================================
 app.get('/', (req, res) => {
   res.json(formatResponse(true, { 
-    message: 'US SMS API is running - CORS Fixed',
+    message: 'US SMS API is running',
     version: '1.0.0',
-    mode: 'firebase-rest-api'
+    service: 'US-SMS',
+    endpoints: [
+      '/api/health',
+      '/api/auth/login',
+      '/api/auth/signup',
+      '/api/user/:uid',
+      '/api/numbers/available',
+      '/api/settings/bulk-buy (public)',
+      '/api/admin/stats',
+      '/api/admin/users',
+      '/api/admin/numbers'
+    ]
   }));
 });
 
