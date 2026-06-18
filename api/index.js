@@ -375,8 +375,8 @@ app.get('/api/numbers/available', async (req, res) => {
     }
     
     try {
-      let numbersRef = db.collection('numbers');
-      let query = numbersRef.where('status', '==', 'available');
+      let query = db.collection('numbers');
+      query = query.where('status', '==', 'available');
       
       if (type !== 'all') {
         const typeLabel = type === 'id' ? 'ID Creation' : 'SMS';
@@ -804,39 +804,47 @@ app.get('/api/admin/users/search', async (req, res) => {
 });
 
 // ===========================================
-// GET ALL NUMBERS (ADMIN) - GET (FIXED)
+// GET ALL NUMBERS (ADMIN) - GET (FULLY FIXED)
 // ===========================================
 app.get('/api/admin/numbers', async (req, res) => {
   try {
-    const { adminId, filter = 'all', type, limit = 50 } = req.query;
+    const { adminId, filter, type, limit = 50 } = req.query;
     
     if (!adminId) {
       return res.status(400).json(formatResponse(false, null, 'adminId required'));
     }
     
-    console.log(`Get admin numbers, filter: ${filter}, type: ${type}, limit: ${limit}`);
+    console.log(`Get admin numbers - filter: ${filter || 'none'}, type: ${type || 'none'}, limit: ${limit}`);
     
     if (!db) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
     }
     
     try {
-      let numbersQuery = db.collection('numbers');
-      let query = numbersQuery.orderBy('addedAt', 'desc');
+      let query = db.collection('numbers');
+      let hasFilter = false;
       
       // Handle type filter (for ID Creation numbers)
       if (type === 'id') {
-        query = numbersQuery.where('type', '==', 'ID Creation').orderBy('addedAt', 'desc');
+        query = query.where('type', '==', 'ID Creation');
+        hasFilter = true;
+        console.log('✅ Filtering by type: ID Creation');
       } 
       // Handle status filters
       else if (filter === 'available') {
-        query = numbersQuery.where('status', '==', 'available').orderBy('addedAt', 'desc');
+        query = query.where('status', '==', 'available');
+        hasFilter = true;
+        console.log('✅ Filtering by status: available');
       } else if (filter === 'sold') {
-        query = numbersQuery.where('status', '==', 'sold').orderBy('addedAt', 'desc');
+        query = query.where('status', '==', 'sold');
+        hasFilter = true;
+        console.log('✅ Filtering by status: sold');
+      } else {
+        console.log('✅ No filter applied - returning all numbers');
       }
-      // 'all' ke liye kuch nahi karna, sab numbers aayenge
       
-      const snapshot = await query.limit(parseInt(limit)).get();
+      // Apply ordering and limit
+      const snapshot = await query.orderBy('addedAt', 'desc').limit(parseInt(limit)).get();
       
       const numbers = [];
       snapshot.forEach(doc => {
@@ -845,6 +853,8 @@ app.get('/api/admin/numbers', async (req, res) => {
           ...doc.data()
         });
       });
+      
+      console.log(`✅ Found ${numbers.length} numbers`);
       
       return res.json(formatResponse(true, numbers));
     } catch (firebaseError) {
