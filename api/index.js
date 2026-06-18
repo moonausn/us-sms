@@ -25,15 +25,19 @@ let firebaseApp = null;
 
 try {
   if (admin) {
+    // Vercel environment variables se read karo
     const privateKey = process.env.FIREBASE_PRIVATE_KEY 
       ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') 
       : undefined;
     
-    if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && privateKey) {
+    const projectId = process.env.FIREBASE_PROJECT_ID || 'usa-nums';
+    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL || 'firebase-adminsdk-fbsvc@usa-nums.iam.gserviceaccount.com';
+    
+    if (projectId && clientEmail && privateKey) {
       firebaseApp = admin.initializeApp({
         credential: admin.credential.cert({
-          projectId: process.env.FIREBASE_PROJECT_ID,
-          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          projectId: projectId,
+          clientEmail: clientEmail,
           privateKey: privateKey
         })
       });
@@ -163,11 +167,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
     
     try {
-      const apiKey = process.env.FIREBASE_API_KEY;
-      
-      if (!apiKey) {
-        return res.status(500).json(formatResponse(false, null, 'Firebase API key not configured'));
-      }
+      const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBdZ7juzs3MKGAyRxbg8VKtx7aIL43W-Ws';
       
       const verifyResponse = await fetch(
         `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
@@ -296,7 +296,7 @@ app.get('/api/user/:uid/numbers', async (req, res) => {
       
       const enhancedNumbers = numbersData.map(num => ({
         ...num,
-        apiUrl: num.apiUrl || `https://sms.usa.com/api/${num.phoneNumber?.replace(/\D/g, '')}`
+        apiUrl: num.apiUrl || `https://sms.ussms.com/api/${num.phoneNumber?.replace(/\D/g, '')}`
       }));
       
       return res.json(formatResponse(true, enhancedNumbers));
@@ -1172,11 +1172,7 @@ app.post('/api/admin/login', async (req, res) => {
     }
     
     try {
-      const apiKey = process.env.FIREBASE_API_KEY;
-      
-      if (!apiKey) {
-        return res.status(500).json(formatResponse(false, null, 'Firebase API key not configured'));
-      }
+      const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBdZ7juzs3MKGAyRxbg8VKtx7aIL43W-Ws';
       
       const verifyResponse = await fetch(
         `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
