@@ -74,9 +74,9 @@ const formatResponse = (success, data, message = '') => ({
 });
 
 // ===========================================
-// DEFAULT BULK BUY SETTINGS (US SMS)
+// DEFAULT PRICING SETTINGS (US SMS)
 // ===========================================
-const defaultBulkBuySettings = {
+const defaultPricingSettings = {
   regularPrice: 0.50,
   packages: {
     package10: { price: 4.50, perNumber: 0.45, save: 0.50, discount: "-10%" },
@@ -567,7 +567,7 @@ app.post('/api/numbers/bulk-buy', async (req, res) => {
 });
 
 // ===========================================
-// 4. PUBLIC BULK BUY SETTINGS ENDPOINT
+// 4. PUBLIC PRICING SETTINGS ENDPOINT
 // ===========================================
 
 app.get('/api/settings/pricing', async (req, res) => {
@@ -583,7 +583,7 @@ app.get('/api/settings/pricing', async (req, res) => {
       
       if (!settingsDoc.exists) {
         console.log('No settings found, returning defaults');
-        return res.json(formatResponse(true, defaultBulkBuySettings));
+        return res.json(formatResponse(true, defaultPricingSettings));
       }
       
       console.log('Settings found, returning from database');
@@ -604,7 +604,7 @@ app.get('/api/settings/pricing', async (req, res) => {
 // ===========================================
 
 // ===========================================
-// ADMIN LOGIN - POST (FIXED - WITH ENV VARS)
+// ADMIN LOGIN - POST (WITH ENV VARS)
 // ===========================================
 app.post('/api/admin/login', async (req, res) => {
   try {
@@ -1112,7 +1112,7 @@ app.post('/api/admin/numbers/update', async (req, res) => {
   }
 });
 
-// SAVE BULK BUY SETTINGS (ADMIN ONLY) - POST
+// SAVE PRICING SETTINGS (ADMIN ONLY) - POST
 app.post('/api/admin/settings/pricing', async (req, res) => {
   try {
     const { adminId, settings } = req.body;
