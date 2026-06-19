@@ -419,7 +419,9 @@ app.get('/api/numbers/available', async (req, res) => {
   }
 });
 
-// BUY NUMBER - POST
+// ===========================================
+// BUY NUMBER - POST (FIXED - Always uses database price)
+// ===========================================
 app.post('/api/numbers/buy', async (req, res) => {
   try {
     const { userId, numberId, price } = req.body;
@@ -456,10 +458,15 @@ app.post('/api/numbers/buy', async (req, res) => {
       }
       
       const userData = userDoc.data();
-      const numberPrice = price || numberData.price || 50;
+      
+      // ===== IMPORTANT FIX: Always use number's actual price from database =====
+      // Frontend se bheja price ignore karein, database ki price use karein
+      const numberPrice = numberData.price || 50;
+      
+      console.log(`Number price from database: ${numberPrice}, Frontend sent: ${price || 'not sent'}`);
       
       if ((userData.credits || 0) < numberPrice) {
-        return res.status(400).json(formatResponse(false, null, 'Insufficient credits'));
+        return res.status(400).json(formatResponse(false, null, `Insufficient credits. This number costs ${numberPrice} PKR.`));
       }
       
       const completeNumberData = {
@@ -469,7 +476,7 @@ app.post('/api/numbers/buy', async (req, res) => {
         originalId: numberId,
         purchasedAt: new Date().toISOString(),
         purchaseType: 'single',
-        price: numberPrice
+        price: numberPrice  // Store actual price from database
       };
       
       await numberRef.update({
@@ -488,8 +495,9 @@ app.post('/api/numbers/buy', async (req, res) => {
       return res.json(formatResponse(true, {
         success: true,
         newBalance: (userData.credits || 0) - numberPrice,
-        number: numberData.phoneNumber
-      }, 'Purchase successful'));
+        number: numberData.phoneNumber,
+        price: numberPrice
+      }, `Purchase successful for ${numberPrice} PKR`));
     } catch (firebaseError) {
       console.error('Firebase update error:', firebaseError);
       return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
@@ -702,9 +710,9 @@ app.get('/api/admin/stats', async (req, res) => {
       const usersSnapshot = await db.collection('users').get();
       const numbersSnapshot = await db.collection('numbers').get();
       
-      let verificationAvailableCount = 0;  // Only SMS/Verification type
+      let verificationAvailableCount = 0;
       let soldCount = 0;
-      let idAvailableCount = 0;            // Only ID Creation type
+      let idAvailableCount = 0;
       
       numbersSnapshot.forEach(doc => {
         const data = doc.data();
@@ -723,9 +731,9 @@ app.get('/api/admin/stats', async (req, res) => {
       
       return res.json(formatResponse(true, {
         totalUsers: usersSnapshot.size,
-        availableNumbers: verificationAvailableCount,  // Only Verification numbers
+        availableNumbers: verificationAvailableCount,
         soldNumbers: soldCount,
-        idAvailableNumbers: idAvailableCount           // Only ID Creation numbers
+        idAvailableNumbers: idAvailableCount
       }));
     } catch (firebaseError) {
       console.error('Firebase stats error:', firebaseError);
@@ -939,7 +947,7 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
             phoneNumber,
             originalNumber: phoneNumber,
             apiUrl: apiUrl || `https://sms.ussms.com/api/${phoneNumber.replace(/\D/g, '')}`,
-            price: price || 50,
+            price: price || 50,  // Store the price admin entered
             type: typeLabel,
             status: 'available',
             addedAt: new Date().toISOString(),
@@ -1180,7 +1188,6 @@ app.post('/api/admin/settings/pricing', async (req, res) => {
     }
     
     try {
-      // Validate and clean settings
       const finalSettings = {
         verification: {
           regularPrice: settings.verification?.regularPrice || 50,
@@ -1192,7 +1199,6 @@ app.post('/api/admin/settings/pricing', async (req, res) => {
         }
       };
       
-      // Only allow 10, 15, 30 packages
       const allowedKeys = ['package10', 'package15', 'package30'];
       
       if (settings.verification?.packages) {
@@ -1211,7 +1217,6 @@ app.post('/api/admin/settings/pricing', async (req, res) => {
         });
       }
       
-      // If old format, convert
       if (settings.packages && !settings.verification) {
         finalSettings.verification.packages = {};
         finalSettings.idCreation.packages = {};
