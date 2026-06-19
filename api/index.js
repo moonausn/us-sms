@@ -95,7 +95,7 @@ const defaultIdCreationPackages = {
 };
 
 // ===========================================
-// PARSE NUMBER LINE - FULLY FIXED
+// PARSE NUMBER LINE - FINAL FIX
 // ===========================================
 function parseNumberLine(line) {
   line = line.trim();
@@ -112,11 +112,12 @@ function parseNumberLine(line) {
       apiUrl = parts.slice(1).join('|').trim();
     }
   }
-  // 2. Try double dash: number----api
+  // 2. Try double dash: number----api - FINAL FIX
   else if (line.includes('----')) {
     const parts = line.split('----').map(s => s.trim());
     phoneNumber = parts[0];
     if (parts.length > 1) {
+      // ✅ FINAL FIX: Sirf API URL parts join karein, phone number nahi
       apiUrl = parts.slice(1).join('----').trim();
     }
   }
@@ -147,7 +148,7 @@ function parseNumberLine(line) {
       apiUrl = '';
     }
   }
-  // 6. Just number (no separator, no api) - ✅ FIX: Allow numbers without API
+  // 6. Just number (no separator, no api)
   else {
     phoneNumber = line;
     apiUrl = '';
@@ -165,7 +166,7 @@ function parseNumberLine(line) {
     }
   }
   
-  // ✅ FIX: Only check phone number, API URL is optional
+  // Check if we have a valid number
   if (!phoneNumber || phoneNumber.length < 4) {
     return null;
   }
@@ -173,6 +174,7 @@ function parseNumberLine(line) {
   // Clean API URL - only if exists
   if (apiUrl) {
     apiUrl = apiUrl.trim();
+    
     // If API URL contains the number pattern, extract just the URL part
     if (apiUrl.includes('http://') || apiUrl.includes('https://')) {
       const urlMatch = apiUrl.match(/(https?:\/\/[^\s]+)/);
@@ -180,6 +182,7 @@ function parseNumberLine(line) {
         apiUrl = urlMatch[0];
       }
     }
+    
     // If API URL doesn't start with http, add https
     if (apiUrl && !apiUrl.startsWith('http://') && !apiUrl.startsWith('https://')) {
       apiUrl = 'https://' + apiUrl;
@@ -514,7 +517,7 @@ app.get('/api/numbers/available', async (req, res) => {
   }
 });
 
-// BUY NUMBER - POST (Uses stored price)
+// BUY NUMBER - POST
 app.post('/api/numbers/buy', async (req, res) => {
   try {
     const { userId, numberId } = req.body;
@@ -981,7 +984,7 @@ app.get('/api/admin/numbers', async (req, res) => {
 });
 
 // ===========================================
-// UPLOAD NUMBERS - POST (FULLY FIXED)
+// UPLOAD NUMBERS - POST (FINAL FIX)
 // ===========================================
 app.post('/api/admin/numbers/upload', async (req, res) => {
   try {
