@@ -95,7 +95,7 @@ const defaultIdCreationPackages = {
 };
 
 // ===========================================
-// PARSE NUMBER LINE - FIXED
+// PARSE NUMBER LINE - FULLY FIXED
 // ===========================================
 function parseNumberLine(line) {
   line = line.trim();
@@ -108,25 +108,33 @@ function parseNumberLine(line) {
   if (line.includes('|')) {
     const parts = line.split('|').map(s => s.trim());
     phoneNumber = parts[0];
-    apiUrl = parts.slice(1).join('|').trim();
+    if (parts.length > 1) {
+      apiUrl = parts.slice(1).join('|').trim();
+    }
   }
   // 2. Try double dash: number----api
   else if (line.includes('----')) {
     const parts = line.split('----').map(s => s.trim());
     phoneNumber = parts[0];
-    apiUrl = parts.slice(1).join('----').trim();
+    if (parts.length > 1) {
+      apiUrl = parts.slice(1).join('----').trim();
+    }
   }
   // 3. Try comma: number,api
   else if (line.includes(',')) {
     const parts = line.split(',').map(s => s.trim());
     phoneNumber = parts[0];
-    apiUrl = parts.slice(1).join(',').trim();
+    if (parts.length > 1) {
+      apiUrl = parts.slice(1).join(',').trim();
+    }
   }
   // 4. Try semicolon: number;api
   else if (line.includes(';')) {
     const parts = line.split(';').map(s => s.trim());
     phoneNumber = parts[0];
-    apiUrl = parts.slice(1).join(';').trim();
+    if (parts.length > 1) {
+      apiUrl = parts.slice(1).join(';').trim();
+    }
   }
   // 5. Try space: number api (if api starts with http)
   else if (line.includes(' ')) {
@@ -139,7 +147,7 @@ function parseNumberLine(line) {
       apiUrl = '';
     }
   }
-  // 6. Just number (no separator, no api)
+  // 6. Just number (no separator, no api) - ✅ FIX: Allow numbers without API
   else {
     phoneNumber = line;
     apiUrl = '';
@@ -157,15 +165,14 @@ function parseNumberLine(line) {
     }
   }
   
-  // Check if we have a valid number
+  // ✅ FIX: Only check phone number, API URL is optional
   if (!phoneNumber || phoneNumber.length < 4) {
     return null;
   }
   
-  // Clean API URL - Extract valid URL
+  // Clean API URL - only if exists
   if (apiUrl) {
     apiUrl = apiUrl.trim();
-    
     // If API URL contains the number pattern, extract just the URL part
     if (apiUrl.includes('http://') || apiUrl.includes('https://')) {
       const urlMatch = apiUrl.match(/(https?:\/\/[^\s]+)/);
@@ -173,7 +180,6 @@ function parseNumberLine(line) {
         apiUrl = urlMatch[0];
       }
     }
-    
     // If API URL doesn't start with http, add https
     if (apiUrl && !apiUrl.startsWith('http://') && !apiUrl.startsWith('https://')) {
       apiUrl = 'https://' + apiUrl;
@@ -975,7 +981,7 @@ app.get('/api/admin/numbers', async (req, res) => {
 });
 
 // ===========================================
-// UPLOAD NUMBERS - POST (FIXED)
+// UPLOAD NUMBERS - POST (FULLY FIXED)
 // ===========================================
 app.post('/api/admin/numbers/upload', async (req, res) => {
   try {
@@ -995,6 +1001,7 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
       const batch = db.batch();
       let successCount = 0;
       let errorCount = 0;
+      let errorMessages = [];
       const typeLabel = type === 'ID Creation' ? 'ID Creation' : 'SMS';
       const defaultPrice = parseFloat(price) || 50;
       
@@ -1007,6 +1014,7 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
             const parsed = parseNumberLine(item);
             if (!parsed) {
               errorCount++;
+              errorMessages.push(`Invalid format: "${item}"`);
               continue;
             }
             phoneNumber = parsed.phoneNumber;
@@ -1018,6 +1026,7 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
           
           if (!phoneNumber) {
             errorCount++;
+            errorMessages.push(`Missing phone number: "${item}"`);
             continue;
           }
           
@@ -1030,6 +1039,7 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
           if (!existingSnapshot.empty) {
             console.log(`⚠️ Number ${phoneNumber} already exists, skipping...`);
             errorCount++;
+            errorMessages.push(`Number ${phoneNumber} already exists`);
             continue;
           }
           
@@ -1037,7 +1047,7 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
           batch.set(numberRef, {
             phoneNumber: phoneNumber,
             originalNumber: phoneNumber,
-            apiUrl: apiUrl || `https://sms.ussms.com/api/${phoneNumber.replace(/\D/g, '')}`,
+            apiUrl: apiUrl || '',
             price: defaultPrice,
             type: typeLabel,
             status: 'available',
@@ -1049,17 +1059,25 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
         } catch (itemError) {
           console.error('Error processing item:', itemError);
           errorCount++;
+          errorMessages.push(`Error: ${itemError.message}`);
         }
       }
       
       if (successCount > 0) {
         await batch.commit();
+        let message = `✅ Added ${successCount} ${typeLabel} numbers`;
+        if (errorCount > 0) {
+          message += `, ${errorCount} skipped`;
+        }
         return res.json(formatResponse(true, { 
           added: successCount, 
-          errors: errorCount 
-        }, `Added ${successCount} ${typeLabel} numbers${errorCount > 0 ? `, ${errorCount} skipped` : ''}`));
+          errors: errorCount,
+          errorMessages: errorMessages
+        }, message));
       } else {
-        return res.status(400).json(formatResponse(false, null, `No valid numbers to upload. ${errorCount} invalid entries.`));
+        return res.status(400).json(formatResponse(false, null, 
+          `No valid numbers to upload. ${errorCount} invalid entries.\n${errorMessages.join('\n')}`
+        ));
       }
     } catch (firebaseError) {
       console.error('Firebase batch error:', firebaseError);
