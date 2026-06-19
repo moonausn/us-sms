@@ -419,7 +419,9 @@ app.get('/api/numbers/available', async (req, res) => {
   }
 });
 
-// BUY NUMBER - POST
+// ===========================================
+// BUY NUMBER - POST (Single Number)
+// ===========================================
 app.post('/api/numbers/buy', async (req, res) => {
   try {
     const { userId, numberId, price } = req.body;
@@ -456,10 +458,7 @@ app.post('/api/numbers/buy', async (req, res) => {
       }
       
       const userData = userDoc.data();
-      
       const numberPrice = numberData.price || 50;
-      
-      console.log(`Number price from database: ${numberPrice}, Frontend sent: ${price || 'not sent'}`);
       
       if ((userData.credits || 0) < numberPrice) {
         return res.status(400).json(formatResponse(false, null, `Insufficient credits. This number costs ${numberPrice} PKR.`));
@@ -505,16 +504,18 @@ app.post('/api/numbers/buy', async (req, res) => {
   }
 });
 
-// BULK BUY - POST
+// ===========================================
+// BULK BUY - POST (Package Purchase - FIXED)
+// ===========================================
 app.post('/api/numbers/bulk-buy', async (req, res) => {
   try {
     const { userId, quantity, totalPrice, numbers } = req.body;
     
     if (!userId || !quantity || !totalPrice || !numbers || !numbers.length) {
-      return res.status(400).json(formatResponse(false, null, 'Missing required fields'));
+      return res.status(400).json(formatResponse(false, null, 'Invalid request: userId, quantity, totalPrice and numbers array required'));
     }
     
-    console.log(`Bulk buy: ${quantity} numbers for user: ${userId}`);
+    console.log(`Bulk buy: ${quantity} numbers for user: ${userId}, total: ${totalPrice} PKR`);
     
     if (!db || !admin) {
       return res.status(503).json(formatResponse(false, null, 'Database connection error'));
@@ -531,9 +532,10 @@ app.post('/api/numbers/bulk-buy', async (req, res) => {
       const userData = userDoc.data();
       
       if ((userData.credits || 0) < totalPrice) {
-        return res.status(400).json(formatResponse(false, null, 'Insufficient credits'));
+        return res.status(400).json(formatResponse(false, null, `Insufficient credits. Package costs ${totalPrice} PKR.`));
       }
       
+      // Prepare data for all numbers
       const purchasedNumbersData = numbers.map(num => ({
         phoneNumber: num.phoneNumber,
         apiUrl: num.apiUrl,
@@ -541,13 +543,15 @@ app.post('/api/numbers/bulk-buy', async (req, res) => {
         originalId: num.id,
         purchasedAt: new Date().toISOString(),
         purchaseType: 'bulk',
-        price: totalPrice / quantity
+        price: Math.round((totalPrice / quantity) * 100) / 100
       }));
       
       const phoneNumbersList = numbers.map(num => num.phoneNumber);
       
+      // Use batch for atomic operation
       const batch = db.batch();
       
+      // Update each number status to sold
       numbers.forEach(num => {
         const numberRef = db.collection('numbers').doc(num.id);
         batch.update(numberRef, {
@@ -558,6 +562,7 @@ app.post('/api/numbers/bulk-buy', async (req, res) => {
         });
       });
       
+      // Update user: deduct credits, add all numbers
       batch.update(userRef, {
         credits: admin.firestore.FieldValue.increment(-totalPrice),
         purchasedNumbers: admin.firestore.FieldValue.arrayUnion(...phoneNumbersList),
@@ -566,11 +571,14 @@ app.post('/api/numbers/bulk-buy', async (req, res) => {
       
       await batch.commit();
       
+      console.log(`✅ Bulk buy successful: ${numbers.length} numbers for ${userId}`);
+      
       return res.json(formatResponse(true, {
         success: true,
         newBalance: (userData.credits || 0) - totalPrice,
-        purchasedCount: numbers.length
-      }, 'Bulk purchase successful'));
+        purchasedCount: numbers.length,
+        numbers: phoneNumbersList
+      }, `Bulk purchase successful: ${numbers.length} numbers for ${totalPrice} PKR`));
       
     } catch (firebaseError) {
       console.error('Firebase batch error:', firebaseError);
@@ -653,7 +661,6 @@ app.post('/api/admin/login', async (req, res) => {
       return res.status(400).json(formatResponse(false, null, 'Email and password required'));
     }
     
-    // Verify admin token
     const validToken = process.env.ADMIN_TOKEN;
     if (!validToken) {
       console.error('❌ ADMIN_TOKEN not set in environment variables');
@@ -665,7 +672,6 @@ app.post('/api/admin/login', async (req, res) => {
       return res.status(401).json(formatResponse(false, null, 'Invalid admin token'));
     }
     
-    // ✅ FIX: Sirf Firebase Auth se verify karein
     const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBdZ7juzs3MKGAyRxbg8VKtx7aIL43W-Ws';
     
     const verifyResponse = await fetch(
@@ -686,7 +692,6 @@ app.post('/api/admin/login', async (req, res) => {
       return res.status(401).json(formatResponse(false, null, 'Invalid email or password'));
     }
     
-    // Verify user is admin in Firestore
     const userSnapshot = await db.collection('users')
       .where('email', '==', email.toLowerCase())
       .where('role', '==', 'admin')
@@ -712,7 +717,7 @@ app.post('/api/admin/login', async (req, res) => {
 });
 
 // ===========================================
-// ADMIN CHANGE PASSWORD - POST (Firebase Auth Only)
+// ADMIN CHANGE PASSWORD - POST
 // ===========================================
 app.post('/api/admin/change-password', async (req, res) => {
   try {
@@ -748,7 +753,6 @@ app.post('/api/admin/change-password', async (req, res) => {
     }
     
     try {
-      // ✅ FIX: Sirf Firebase Auth se verify karein
       const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBdZ7juzs3MKGAyRxbg8VKtx7aIL43W-Ws';
       
       console.log(`Verifying current password for admin via Firebase Auth: ${email}`);
@@ -773,7 +777,6 @@ app.post('/api/admin/change-password', async (req, res) => {
       
       console.log(`✅ Current password verified for admin: ${email}`);
       
-      // Verify user is admin in Firestore
       const userSnapshot = await db.collection('users')
         .where('email', '==', email.toLowerCase())
         .where('role', '==', 'admin')
@@ -1398,6 +1401,7 @@ app.get('/', (req, res) => {
       '/api/auth/signup',
       '/api/user/:uid',
       '/api/numbers/available',
+      '/api/numbers/bulk-buy (NEW)',
       '/api/settings/pricing (public)',
       '/api/admin/login',
       '/api/admin/change-password',
