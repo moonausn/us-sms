@@ -95,6 +95,87 @@ const defaultIdCreationPackages = {
 };
 
 // ===========================================
+// PARSE NUMBER LINE - SUPPORTS MULTIPLE SEPARATORS
+// ===========================================
+function parseNumberLine(line) {
+  line = line.trim();
+  if (!line) return null;
+  
+  // Try different separators
+  let phoneNumber = null;
+  let apiUrl = null;
+  
+  // 1. Try pipe separator: number|api
+  if (line.includes('|')) {
+    const parts = line.split('|').map(s => s.trim());
+    phoneNumber = parts[0];
+    apiUrl = parts.slice(1).join('|').trim();
+  }
+  // 2. Try double dash: number----api
+  else if (line.includes('----')) {
+    const parts = line.split('----').map(s => s.trim());
+    phoneNumber = parts[0];
+    apiUrl = parts.slice(1).join('----').trim();
+  }
+  // 3. Try comma: number,api
+  else if (line.includes(',')) {
+    const parts = line.split(',').map(s => s.trim());
+    phoneNumber = parts[0];
+    apiUrl = parts.slice(1).join(',').trim();
+  }
+  // 4. Try semicolon: number;api
+  else if (line.includes(';')) {
+    const parts = line.split(';').map(s => s.trim());
+    phoneNumber = parts[0];
+    apiUrl = parts.slice(1).join(';').trim();
+  }
+  // 5. Try space: number api (if api starts with http)
+  else if (line.includes(' ')) {
+    const parts = line.split(/\s+/);
+    // Check if second part looks like a URL
+    if (parts.length >= 2 && (parts[1].startsWith('http://') || parts[1].startsWith('https://'))) {
+      phoneNumber = parts[0];
+      apiUrl = parts.slice(1).join(' ');
+    } else {
+      // Just a number, no API
+      phoneNumber = line;
+      apiUrl = '';
+    }
+  }
+  // 6. Just number (no separator, no api)
+  else {
+    phoneNumber = line;
+    apiUrl = '';
+  }
+  
+  // Clean phone number (remove any extra characters)
+  if (phoneNumber) {
+    // Remove any leading/trailing spaces
+    phoneNumber = phoneNumber.trim();
+    // If number starts with +, keep it, otherwise clean non-digits
+    if (!phoneNumber.startsWith('+')) {
+      phoneNumber = phoneNumber.replace(/\D/g, '');
+    }
+  }
+  
+  // Check if we have a valid number
+  if (!phoneNumber || phoneNumber.length < 4) {
+    return null;
+  }
+  
+  // Clean API URL
+  if (apiUrl) {
+    apiUrl = apiUrl.trim();
+    // If API URL doesn't start with http, add https
+    if (apiUrl && !apiUrl.startsWith('http://') && !apiUrl.startsWith('https://')) {
+      apiUrl = 'https://' + apiUrl;
+    }
+  }
+  
+  return { phoneNumber, apiUrl };
+}
+
+// ===========================================
 // 1. AUTH ENDPOINTS
 // ===========================================
 
@@ -419,7 +500,7 @@ app.get('/api/numbers/available', async (req, res) => {
   }
 });
 
-// BUY NUMBER - POST
+// BUY NUMBER - POST (FIXED - Uses stored price)
 app.post('/api/numbers/buy', async (req, res) => {
   try {
     const { userId, numberId, price } = req.body;
@@ -456,7 +537,11 @@ app.post('/api/numbers/buy', async (req, res) => {
       }
       
       const userData = userDoc.data();
-      const numberPrice = price || numberData.price || 50;
+      
+      // ✅ FIX: Use the number's stored price, not the passed price
+      const numberPrice = numberData.price || 50;
+      
+      console.log(`Number price: ${numberPrice}, User balance: ${userData.credits || 0}`);
       
       if ((userData.credits || 0) < numberPrice) {
         return res.status(400).json(formatResponse(false, null, 'Insufficient credits'));
@@ -488,7 +573,8 @@ app.post('/api/numbers/buy', async (req, res) => {
       return res.json(formatResponse(true, {
         success: true,
         newBalance: (userData.credits || 0) - numberPrice,
-        number: numberData.phoneNumber
+        number: numberData.phoneNumber,
+        price: numberPrice
       }, 'Purchase successful'));
     } catch (firebaseError) {
       console.error('Firebase update error:', firebaseError);
@@ -605,7 +691,6 @@ app.get('/api/settings/pricing', async (req, res) => {
       console.log('Settings found, returning from database');
       const data = settingsDoc.data();
       
-      // If old format, convert to new format
       if (data.packages && !data.verification) {
         return res.json(formatResponse(true, {
           verification: {
@@ -635,9 +720,7 @@ app.get('/api/settings/pricing', async (req, res) => {
 // 5. ADMIN ENDPOINTS
 // ===========================================
 
-// ===========================================
-// ADMIN LOGIN - POST (WITH ENV VARS)
-// ===========================================
+// ADMIN LOGIN - POST
 app.post('/api/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -885,7 +968,9 @@ app.get('/api/admin/numbers', async (req, res) => {
   }
 });
 
-// UPLOAD NUMBERS - POST
+// ===========================================
+// UPLOAD NUMBERS - POST (FIXED - Multiple separators support)
+// ===========================================
 app.post('/api/admin/numbers/upload', async (req, res) => {
   try {
     const { adminId, numbers, price, type } = req.body;
@@ -903,38 +988,51 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
     try {
       const batch = db.batch();
       let successCount = 0;
+      let errorCount = 0;
       const typeLabel = type === 'ID Creation' ? 'ID Creation' : 'SMS';
+      const defaultPrice = parseFloat(price) || 50;
       
       for (const item of numbers) {
         try {
           let phoneNumber, apiUrl;
           
+          // If item is string, parse it
           if (typeof item === 'string') {
-            const parts = item.split('|');
-            phoneNumber = parts[0]?.trim();
-            apiUrl = parts[1]?.trim();
+            const parsed = parseNumberLine(item);
+            if (!parsed) {
+              errorCount++;
+              continue;
+            }
+            phoneNumber = parsed.phoneNumber;
+            apiUrl = parsed.apiUrl;
           } else {
             phoneNumber = item.phoneNumber;
             apiUrl = item.apiUrl;
           }
           
-          if (!phoneNumber) continue;
+          if (!phoneNumber) {
+            errorCount++;
+            continue;
+          }
           
+          // Check if number already exists
           const existingSnapshot = await db.collection('numbers')
             .where('phoneNumber', '==', phoneNumber)
             .limit(1)
             .get();
           
           if (!existingSnapshot.empty) {
+            console.log(`⚠️ Number ${phoneNumber} already exists, skipping...`);
+            errorCount++;
             continue;
           }
           
           const numberRef = db.collection('numbers').doc();
           batch.set(numberRef, {
-            phoneNumber,
+            phoneNumber: phoneNumber,
             originalNumber: phoneNumber,
             apiUrl: apiUrl || `https://sms.ussms.com/api/${phoneNumber.replace(/\D/g, '')}`,
-            price: price || 50,
+            price: defaultPrice,
             type: typeLabel,
             status: 'available',
             addedAt: new Date().toISOString(),
@@ -944,14 +1042,18 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
           successCount++;
         } catch (itemError) {
           console.error('Error processing item:', itemError);
+          errorCount++;
         }
       }
       
       if (successCount > 0) {
         await batch.commit();
-        return res.json(formatResponse(true, { added: successCount }, `Added ${successCount} ${typeLabel} numbers`));
+        return res.json(formatResponse(true, { 
+          added: successCount, 
+          errors: errorCount 
+        }, `Added ${successCount} ${typeLabel} numbers${errorCount > 0 ? `, ${errorCount} skipped` : ''}`));
       } else {
-        return res.status(400).json(formatResponse(false, null, 'No valid numbers to upload'));
+        return res.status(400).json(formatResponse(false, null, `No valid numbers to upload. ${errorCount} invalid entries.`));
       }
     } catch (firebaseError) {
       console.error('Firebase batch error:', firebaseError);
@@ -1157,9 +1259,7 @@ app.post('/api/admin/numbers/update', async (req, res) => {
   }
 });
 
-// ===========================================
 // SAVE PRICING SETTINGS (ADMIN ONLY) - POST
-// ===========================================
 app.post('/api/admin/settings/pricing', async (req, res) => {
   try {
     const { adminId, settings } = req.body;
@@ -1175,7 +1275,6 @@ app.post('/api/admin/settings/pricing', async (req, res) => {
     }
     
     try {
-      // Validate and clean settings
       const finalSettings = {
         verification: {
           regularPrice: settings.verification?.regularPrice || 50,
@@ -1187,7 +1286,6 @@ app.post('/api/admin/settings/pricing', async (req, res) => {
         }
       };
       
-      // Only allow 10, 15, 30 packages
       const allowedKeys = ['package10', 'package15', 'package30'];
       
       if (settings.verification?.packages) {
@@ -1206,7 +1304,6 @@ app.post('/api/admin/settings/pricing', async (req, res) => {
         });
       }
       
-      // If old format, convert
       if (settings.packages && !settings.verification) {
         finalSettings.verification.packages = {};
         finalSettings.idCreation.packages = {};
