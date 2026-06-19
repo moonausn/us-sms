@@ -419,9 +419,7 @@ app.get('/api/numbers/available', async (req, res) => {
   }
 });
 
-// ===========================================
-// BUY NUMBER - POST (FIXED - Always uses database price)
-// ===========================================
+// BUY NUMBER - POST
 app.post('/api/numbers/buy', async (req, res) => {
   try {
     const { userId, numberId, price } = req.body;
@@ -459,7 +457,6 @@ app.post('/api/numbers/buy', async (req, res) => {
       
       const userData = userDoc.data();
       
-      // Always use number's actual price from database
       const numberPrice = numberData.price || 50;
       
       console.log(`Number price from database: ${numberPrice}, Frontend sent: ${price || 'not sent'}`);
@@ -688,7 +685,7 @@ app.post('/api/admin/login', async (req, res) => {
 });
 
 // ===========================================
-// ADMIN CHANGE PASSWORD - POST (NEW)
+// ADMIN CHANGE PASSWORD - POST (FIXED)
 // ===========================================
 app.post('/api/admin/change-password', async (req, res) => {
   try {
@@ -732,8 +729,10 @@ app.post('/api/admin/change-password', async (req, res) => {
         return res.status(500).json(formatResponse(false, null, 'Admin email not configured'));
       }
       
-      // First, verify current password using Firebase REST API
+      // ===== FIX: Verify current password using Firebase REST API =====
       const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBdZ7juzs3MKGAyRxbg8VKtx7aIL43W-Ws';
+      
+      console.log(`Verifying current password for admin: ${adminEmail}`);
       
       const verifyResponse = await fetch(
         `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
@@ -752,6 +751,7 @@ app.post('/api/admin/change-password', async (req, res) => {
       
       if (!verifyResponse.ok) {
         console.log(`❌ Current password verification failed for admin`);
+        console.log(`Error: ${verifyData.error?.message || 'Unknown error'}`);
         return res.status(401).json(formatResponse(false, null, 'Current password is incorrect'));
       }
       
@@ -771,14 +771,17 @@ app.post('/api/admin/change-password', async (req, res) => {
       
       console.log(`✅ Admin password updated successfully for: ${adminEmail}`);
       
-      // Also update ADMIN_PASSWORD in environment? No, Vercel env vars can't be updated runtime.
-      // But Firebase Auth password is now updated, so login will work with new password.
-      // The ADMIN_PASSWORD env var will still show old value, but Firebase Auth takes precedence.
-      
+      // Force token refresh - user will need to login again
       return res.json(formatResponse(true, null, 'Password changed successfully. Please login again with new password.'));
       
     } catch (firebaseError) {
       console.error('Firebase error:', firebaseError);
+      
+      // Check if it's an auth error
+      if (firebaseError.code === 'auth/user-not-found') {
+        return res.status(404).json(formatResponse(false, null, 'Admin user not found'));
+      }
+      
       return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
     }
     
@@ -1373,7 +1376,7 @@ app.get('/', (req, res) => {
       '/api/numbers/available',
       '/api/settings/pricing (public)',
       '/api/admin/login',
-      '/api/admin/change-password (NEW)',
+      '/api/admin/change-password',
       '/api/admin/stats',
       '/api/admin/users',
       '/api/admin/numbers'
