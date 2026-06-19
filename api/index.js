@@ -661,6 +661,7 @@ app.post('/api/admin/login', async (req, res) => {
       return res.status(500).json(formatResponse(false, null, 'Admin credentials not configured'));
     }
     
+    // First check env password (fast check)
     if (email !== validEmail || password !== validPassword) {
       console.log(`❌ Admin login failed: Invalid credentials for ${email}`);
       return res.status(401).json(formatResponse(false, null, 'Invalid email or password'));
@@ -671,12 +672,39 @@ app.post('/api/admin/login', async (req, res) => {
       return res.status(401).json(formatResponse(false, null, 'Invalid admin token'));
     }
     
-    console.log(`✅ Admin login successful: ${email}`);
-    
-    return res.json(formatResponse(true, {
-      adminEmail: email,
-      adminUid: 'admin_' + Date.now()
-    }, 'Admin login successful'));
+    // Also verify in Firebase Auth
+    try {
+      const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBdZ7juzs3MKGAyRxbg8VKtx7aIL43W-Ws';
+      
+      const verifyResponse = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: email,
+            password: password,
+            returnSecureToken: true
+          })
+        }
+      );
+      
+      if (!verifyResponse.ok) {
+        console.log(`❌ Firebase Auth verification failed for admin`);
+        return res.status(401).json(formatResponse(false, null, 'Invalid email or password'));
+      }
+      
+      console.log(`✅ Admin login successful: ${email}`);
+      
+      return res.json(formatResponse(true, {
+        adminEmail: email,
+        adminUid: 'admin_' + Date.now()
+      }, 'Admin login successful'));
+      
+    } catch (firebaseError) {
+      console.error('Firebase error:', firebaseError);
+      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
+    }
     
   } catch (error) {
     console.error('Admin login error:', error);
@@ -685,7 +713,7 @@ app.post('/api/admin/login', async (req, res) => {
 });
 
 // ===========================================
-// ADMIN CHANGE PASSWORD - POST (FIXED)
+// ADMIN CHANGE PASSWORD - POST (FIXED - Firebase Auth)
 // ===========================================
 app.post('/api/admin/change-password', async (req, res) => {
   try {
@@ -722,7 +750,6 @@ app.post('/api/admin/change-password', async (req, res) => {
     }
     
     try {
-      // Get admin email from environment
       const adminEmail = process.env.ADMIN_EMAIL;
       
       if (!adminEmail) {
@@ -732,7 +759,7 @@ app.post('/api/admin/change-password', async (req, res) => {
       // ===== FIX: Verify current password using Firebase REST API =====
       const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBdZ7juzs3MKGAyRxbg8VKtx7aIL43W-Ws';
       
-      console.log(`Verifying current password for admin: ${adminEmail}`);
+      console.log(`Verifying current password for admin via Firebase Auth: ${adminEmail}`);
       
       const verifyResponse = await fetch(
         `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
@@ -771,15 +798,13 @@ app.post('/api/admin/change-password', async (req, res) => {
       
       console.log(`✅ Admin password updated successfully for: ${adminEmail}`);
       
-      // Force token refresh - user will need to login again
       return res.json(formatResponse(true, null, 'Password changed successfully. Please login again with new password.'));
       
     } catch (firebaseError) {
       console.error('Firebase error:', firebaseError);
       
-      // Check if it's an auth error
       if (firebaseError.code === 'auth/user-not-found') {
-        return res.status(404).json(formatResponse(false, null, 'Admin user not found'));
+        return res.status(404).json(formatResponse(false, null, 'Admin user not found in Firebase Auth'));
       }
       
       return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
