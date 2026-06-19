@@ -95,13 +95,12 @@ const defaultIdCreationPackages = {
 };
 
 // ===========================================
-// PARSE NUMBER LINE - SUPPORTS MULTIPLE SEPARATORS
+// PARSE NUMBER LINE - FIXED
 // ===========================================
 function parseNumberLine(line) {
   line = line.trim();
   if (!line) return null;
   
-  // Try different separators
   let phoneNumber = null;
   let apiUrl = null;
   
@@ -132,12 +131,10 @@ function parseNumberLine(line) {
   // 5. Try space: number api (if api starts with http)
   else if (line.includes(' ')) {
     const parts = line.split(/\s+/);
-    // Check if second part looks like a URL
     if (parts.length >= 2 && (parts[1].startsWith('http://') || parts[1].startsWith('https://'))) {
       phoneNumber = parts[0];
       apiUrl = parts.slice(1).join(' ');
     } else {
-      // Just a number, no API
       phoneNumber = line;
       apiUrl = '';
     }
@@ -148,12 +145,14 @@ function parseNumberLine(line) {
     apiUrl = '';
   }
   
-  // Clean phone number (remove any extra characters)
+  // Clean phone number - keep + if present
   if (phoneNumber) {
-    // Remove any leading/trailing spaces
     phoneNumber = phoneNumber.trim();
-    // If number starts with +, keep it, otherwise clean non-digits
-    if (!phoneNumber.startsWith('+')) {
+    // If number starts with +, keep it as is (only remove spaces)
+    if (phoneNumber.startsWith('+')) {
+      phoneNumber = phoneNumber.replace(/\s/g, '');
+    } else {
+      // Otherwise remove all non-digits
       phoneNumber = phoneNumber.replace(/\D/g, '');
     }
   }
@@ -163,9 +162,18 @@ function parseNumberLine(line) {
     return null;
   }
   
-  // Clean API URL
+  // Clean API URL - Extract valid URL
   if (apiUrl) {
     apiUrl = apiUrl.trim();
+    
+    // If API URL contains the number pattern, extract just the URL part
+    if (apiUrl.includes('http://') || apiUrl.includes('https://')) {
+      const urlMatch = apiUrl.match(/(https?:\/\/[^\s]+)/);
+      if (urlMatch) {
+        apiUrl = urlMatch[0];
+      }
+    }
+    
     // If API URL doesn't start with http, add https
     if (apiUrl && !apiUrl.startsWith('http://') && !apiUrl.startsWith('https://')) {
       apiUrl = 'https://' + apiUrl;
@@ -500,10 +508,10 @@ app.get('/api/numbers/available', async (req, res) => {
   }
 });
 
-// BUY NUMBER - POST (FIXED - Uses stored price)
+// BUY NUMBER - POST (Uses stored price)
 app.post('/api/numbers/buy', async (req, res) => {
   try {
-    const { userId, numberId, price } = req.body;
+    const { userId, numberId } = req.body;
     
     if (!userId || !numberId) {
       return res.status(400).json(formatResponse(false, null, 'Missing required fields'));
@@ -537,8 +545,6 @@ app.post('/api/numbers/buy', async (req, res) => {
       }
       
       const userData = userDoc.data();
-      
-      // ✅ FIX: Use the number's stored price, not the passed price
       const numberPrice = numberData.price || 50;
       
       console.log(`Number price: ${numberPrice}, User balance: ${userData.credits || 0}`);
@@ -969,7 +975,7 @@ app.get('/api/admin/numbers', async (req, res) => {
 });
 
 // ===========================================
-// UPLOAD NUMBERS - POST (FIXED - Multiple separators support)
+// UPLOAD NUMBERS - POST (FIXED)
 // ===========================================
 app.post('/api/admin/numbers/upload', async (req, res) => {
   try {
