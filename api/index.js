@@ -459,8 +459,7 @@ app.post('/api/numbers/buy', async (req, res) => {
       
       const userData = userDoc.data();
       
-      // ===== IMPORTANT FIX: Always use number's actual price from database =====
-      // Frontend se bheja price ignore karein, database ki price use karein
+      // Always use number's actual price from database
       const numberPrice = numberData.price || 50;
       
       console.log(`Number price from database: ${numberPrice}, Frontend sent: ${price || 'not sent'}`);
@@ -476,7 +475,7 @@ app.post('/api/numbers/buy', async (req, res) => {
         originalId: numberId,
         purchasedAt: new Date().toISOString(),
         purchaseType: 'single',
-        price: numberPrice  // Store actual price from database
+        price: numberPrice
       };
       
       await numberRef.update({
@@ -613,7 +612,6 @@ app.get('/api/settings/pricing', async (req, res) => {
       console.log('Settings found, returning from database');
       const data = settingsDoc.data();
       
-      // If old format, convert to new format
       if (data.packages && !data.verification) {
         return res.json(formatResponse(true, {
           verification: {
@@ -690,8 +688,107 @@ app.post('/api/admin/login', async (req, res) => {
 });
 
 // ===========================================
-// ADMIN STATS - GET (FIXED - Separate Verification & ID)
+// ADMIN CHANGE PASSWORD - POST (NEW)
 // ===========================================
+app.post('/api/admin/change-password', async (req, res) => {
+  try {
+    const { adminId, currentPassword, newPassword, confirmPassword } = req.body;
+    const adminToken = req.headers['admin-token'];
+    
+    if (!adminId || !currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json(formatResponse(false, null, 'All fields are required'));
+    }
+    
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json(formatResponse(false, null, 'New passwords do not match'));
+    }
+    
+    if (newPassword.length < 6) {
+      return res.status(400).json(formatResponse(false, null, 'Password must be at least 6 characters'));
+    }
+    
+    if (!adminToken) {
+      return res.status(401).json(formatResponse(false, null, 'Admin token required'));
+    }
+    
+    console.log(`Admin password change attempt for: ${adminId}`);
+    
+    // Verify admin token
+    const validToken = process.env.ADMIN_TOKEN;
+    if (adminToken !== validToken) {
+      console.log('❌ Invalid admin token for password change');
+      return res.status(401).json(formatResponse(false, null, 'Invalid admin token'));
+    }
+    
+    if (!auth) {
+      return res.status(503).json(formatResponse(false, null, 'Auth service not available'));
+    }
+    
+    try {
+      // Get admin email from environment
+      const adminEmail = process.env.ADMIN_EMAIL;
+      
+      if (!adminEmail) {
+        return res.status(500).json(formatResponse(false, null, 'Admin email not configured'));
+      }
+      
+      // First, verify current password using Firebase REST API
+      const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBdZ7juzs3MKGAyRxbg8VKtx7aIL43W-Ws';
+      
+      const verifyResponse = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: adminEmail,
+            password: currentPassword,
+            returnSecureToken: true
+          })
+        }
+      );
+      
+      const verifyData = await verifyResponse.json();
+      
+      if (!verifyResponse.ok) {
+        console.log(`❌ Current password verification failed for admin`);
+        return res.status(401).json(formatResponse(false, null, 'Current password is incorrect'));
+      }
+      
+      console.log(`✅ Current password verified for admin: ${adminEmail}`);
+      
+      // Get the admin user from Firebase Auth
+      const userRecord = await auth.getUserByEmail(adminEmail);
+      
+      if (!userRecord) {
+        return res.status(404).json(formatResponse(false, null, 'Admin user not found in Firebase Auth'));
+      }
+      
+      // Update password in Firebase Auth
+      await auth.updateUser(userRecord.uid, {
+        password: newPassword
+      });
+      
+      console.log(`✅ Admin password updated successfully for: ${adminEmail}`);
+      
+      // Also update ADMIN_PASSWORD in environment? No, Vercel env vars can't be updated runtime.
+      // But Firebase Auth password is now updated, so login will work with new password.
+      // The ADMIN_PASSWORD env var will still show old value, but Firebase Auth takes precedence.
+      
+      return res.json(formatResponse(true, null, 'Password changed successfully. Please login again with new password.'));
+      
+    } catch (firebaseError) {
+      console.error('Firebase error:', firebaseError);
+      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
+    }
+    
+  } catch (error) {
+    console.error('Admin password change error:', error);
+    return res.status(500).json(formatResponse(false, null, error.message));
+  }
+});
+
+// ADMIN STATS - GET
 app.get('/api/admin/stats', async (req, res) => {
   try {
     const { adminId } = req.query;
@@ -947,7 +1044,7 @@ app.post('/api/admin/numbers/upload', async (req, res) => {
             phoneNumber,
             originalNumber: phoneNumber,
             apiUrl: apiUrl || `https://sms.ussms.com/api/${phoneNumber.replace(/\D/g, '')}`,
-            price: price || 50,  // Store the price admin entered
+            price: price || 50,
             type: typeLabel,
             status: 'available',
             addedAt: new Date().toISOString(),
@@ -1170,9 +1267,7 @@ app.post('/api/admin/numbers/update', async (req, res) => {
   }
 });
 
-// ===========================================
 // SAVE PRICING SETTINGS (ADMIN ONLY) - POST
-// ===========================================
 app.post('/api/admin/settings/pricing', async (req, res) => {
   try {
     const { adminId, settings } = req.body;
@@ -1278,6 +1373,7 @@ app.get('/', (req, res) => {
       '/api/numbers/available',
       '/api/settings/pricing (public)',
       '/api/admin/login',
+      '/api/admin/change-password (NEW)',
       '/api/admin/stats',
       '/api/admin/users',
       '/api/admin/numbers'
