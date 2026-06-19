@@ -639,7 +639,7 @@ app.get('/api/settings/pricing', async (req, res) => {
 // ===========================================
 
 // ===========================================
-// ADMIN LOGIN - POST (FIXED - Route Added)
+// ADMIN LOGIN - POST (Firebase Auth Only)
 // ===========================================
 app.post('/api/admin/login', async (req, res) => {
   try {
@@ -649,26 +649,15 @@ app.post('/api/admin/login', async (req, res) => {
     console.log(`Admin login attempt for: ${email}`);
     console.log(`Token received: ${adminToken ? 'Yes' : 'No'}`);
     
-    if (!email || !password || !adminToken) {
-      return res.status(400).json(formatResponse(false, null, 'Email, password and admin token required'));
+    if (!email || !password) {
+      return res.status(400).json(formatResponse(false, null, 'Email and password required'));
     }
     
-    const validEmail = process.env.ADMIN_EMAIL;
-    const validPassword = process.env.ADMIN_PASSWORD;
+    // Verify admin token
     const validToken = process.env.ADMIN_TOKEN;
-    
-    console.log(`Valid Email: ${validEmail}`);
-    console.log(`Valid Token: ${validToken ? 'Yes' : 'No'}`);
-    
-    if (!validEmail || !validPassword || !validToken) {
-      console.error('❌ Admin credentials not set in environment variables');
-      return res.status(500).json(formatResponse(false, null, 'Admin credentials not configured'));
-    }
-    
-    // Check env password first
-    if (email !== validEmail || password !== validPassword) {
-      console.log(`❌ Admin login failed: Invalid credentials for ${email}`);
-      return res.status(401).json(formatResponse(false, null, 'Invalid email or password'));
+    if (!validToken) {
+      console.error('❌ ADMIN_TOKEN not set in environment variables');
+      return res.status(500).json(formatResponse(false, null, 'Admin token not configured'));
     }
     
     if (adminToken !== validToken) {
@@ -676,34 +665,37 @@ app.post('/api/admin/login', async (req, res) => {
       return res.status(401).json(formatResponse(false, null, 'Invalid admin token'));
     }
     
-    // Also verify in Firebase Auth (if available)
-    try {
-      const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBdZ7juzs3MKGAyRxbg8VKtx7aIL43W-Ws';
-      
-      const verifyResponse = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: email,
-            password: password,
-            returnSecureToken: true
-          })
-        }
-      );
-      
-      if (!verifyResponse.ok) {
-        console.log(`❌ Firebase Auth verification failed for admin`);
-        // Still allow login since env password matched
-        console.log(`⚠️ Admin login allowed but Firebase Auth verification failed`);
-      } else {
-        console.log(`✅ Firebase Auth verified for admin: ${email}`);
+    // ✅ FIX: Sirf Firebase Auth se verify karein
+    const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBdZ7juzs3MKGAyRxbg8VKtx7aIL43W-Ws';
+    
+    const verifyResponse = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email,
+          password: password,
+          returnSecureToken: true
+        })
       }
-      
-    } catch (firebaseError) {
-      console.log(`⚠️ Firebase Auth verification error: ${firebaseError.message}`);
-      // Continue anyway since env password matched
+    );
+    
+    if (!verifyResponse.ok) {
+      console.log(`❌ Admin login failed for ${email}`);
+      return res.status(401).json(formatResponse(false, null, 'Invalid email or password'));
+    }
+    
+    // Verify user is admin in Firestore
+    const userSnapshot = await db.collection('users')
+      .where('email', '==', email.toLowerCase())
+      .where('role', '==', 'admin')
+      .limit(1)
+      .get();
+    
+    if (userSnapshot.empty) {
+      console.log(`❌ Admin login failed: ${email} is not an admin in Firestore`);
+      return res.status(403).json(formatResponse(false, null, 'Access denied: Not an admin'));
     }
     
     console.log(`✅ Admin login successful: ${email}`);
@@ -720,15 +712,17 @@ app.post('/api/admin/login', async (req, res) => {
 });
 
 // ===========================================
-// ADMIN CHANGE PASSWORD - POST
+// ADMIN CHANGE PASSWORD - POST (Firebase Auth Only)
 // ===========================================
 app.post('/api/admin/change-password', async (req, res) => {
   try {
-    const { adminId, currentPassword, newPassword, confirmPassword } = req.body;
+    const { adminId, currentPassword, newPassword, confirmPassword, email } = req.body;
     const adminToken = req.headers['admin-token'];
     
-    if (!adminId || !currentPassword || !newPassword || !confirmPassword) {
-      return res.status(400).json(formatResponse(false, null, 'All fields are required'));
+    console.log(`Admin password change attempt for: ${email || adminId}`);
+    
+    if (!email || !currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json(formatResponse(false, null, 'Email, current password, new password and confirm password are required'));
     }
     
     if (newPassword !== confirmPassword) {
@@ -743,8 +737,6 @@ app.post('/api/admin/change-password', async (req, res) => {
       return res.status(401).json(formatResponse(false, null, 'Admin token required'));
     }
     
-    console.log(`Admin password change attempt for: ${adminId}`);
-    
     const validToken = process.env.ADMIN_TOKEN;
     if (adminToken !== validToken) {
       console.log('❌ Invalid admin token for password change');
@@ -756,16 +748,10 @@ app.post('/api/admin/change-password', async (req, res) => {
     }
     
     try {
-      const adminEmail = process.env.ADMIN_EMAIL;
-      
-      if (!adminEmail) {
-        return res.status(500).json(formatResponse(false, null, 'Admin email not configured'));
-      }
-      
-      // Verify current password using Firebase REST API
+      // ✅ FIX: Sirf Firebase Auth se verify karein
       const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBdZ7juzs3MKGAyRxbg8VKtx7aIL43W-Ws';
       
-      console.log(`Verifying current password for admin via Firebase Auth: ${adminEmail}`);
+      console.log(`Verifying current password for admin via Firebase Auth: ${email}`);
       
       const verifyResponse = await fetch(
         `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
@@ -773,24 +759,33 @@ app.post('/api/admin/change-password', async (req, res) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            email: adminEmail,
+            email: email,
             password: currentPassword,
             returnSecureToken: true
           })
         }
       );
       
-      const verifyData = await verifyResponse.json();
-      
       if (!verifyResponse.ok) {
         console.log(`❌ Current password verification failed for admin`);
-        console.log(`Error: ${verifyData.error?.message || 'Unknown error'}`);
         return res.status(401).json(formatResponse(false, null, 'Current password is incorrect'));
       }
       
-      console.log(`✅ Current password verified for admin: ${adminEmail}`);
+      console.log(`✅ Current password verified for admin: ${email}`);
       
-      const userRecord = await auth.getUserByEmail(adminEmail);
+      // Verify user is admin in Firestore
+      const userSnapshot = await db.collection('users')
+        .where('email', '==', email.toLowerCase())
+        .where('role', '==', 'admin')
+        .limit(1)
+        .get();
+      
+      if (userSnapshot.empty) {
+        console.log(`❌ Password change failed: ${email} is not an admin`);
+        return res.status(403).json(formatResponse(false, null, 'Access denied: Not an admin'));
+      }
+      
+      const userRecord = await auth.getUserByEmail(email);
       
       if (!userRecord) {
         return res.status(404).json(formatResponse(false, null, 'Admin user not found in Firebase Auth'));
@@ -800,7 +795,7 @@ app.post('/api/admin/change-password', async (req, res) => {
         password: newPassword
       });
       
-      console.log(`✅ Admin password updated successfully for: ${adminEmail}`);
+      console.log(`✅ Admin password updated successfully for: ${email}`);
       
       return res.json(formatResponse(true, null, 'Password changed successfully. Please login again with new password.'));
       
