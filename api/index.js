@@ -1,1433 +1,416 @@
-// ===========================================
-// US SMS - BACKEND API (VERCEL + FIREBASE)
-// ===========================================
+const axios = require('axios');
 
-const express = require('express');
-const cors = require('cors');
+export default async function handler(req, res) {
+  // ---------- CACHE DISABLE ----------
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Access-Control-Allow-Origin', '*');
 
-// Firebase Admin SDK
-let admin = null;
-let db = null;
-let auth = null;
-
-try {
-  admin = require('firebase-admin');
-  console.log("✅ Firebase Admin loaded");
-} catch (error) {
-  console.error("❌ Firebase Admin load error:", error.message);
-  process.exit(1);
-}
-
-// ===========================================
-// INITIALIZE FIREBASE ADMIN
-// ===========================================
-let firebaseApp = null;
-
-try {
-  if (admin) {
-    const privateKey = process.env.FIREBASE_PRIVATE_KEY 
-      ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') 
-      : undefined;
-    
-    const projectId = process.env.FIREBASE_PROJECT_ID || 'usa-nums';
-    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL || 'firebase-adminsdk-fbsvc@usa-nums.iam.gserviceaccount.com';
-    
-    if (projectId && clientEmail && privateKey) {
-      firebaseApp = admin.initializeApp({
-        credential: admin.credential.cert({
-          projectId: projectId,
-          clientEmail: clientEmail,
-          privateKey: privateKey
-        })
-      });
-      console.log("✅ Firebase Admin initialized with cert");
-    } else {
-      console.error("❌ Missing Firebase environment variables");
-      process.exit(1);
-    }
-    
-    db = admin.firestore();
-    auth = admin.auth();
-    console.log("✅ Firestore and Auth initialized");
+  // ---------- TOKEN CHECK ----------
+  const { token } = req.query;
+  if (!token) {
+    return res.status(400).json({ site: "Moon US Nums", error: "Missing token" });
   }
-} catch (error) {
-  console.error("❌ Firebase Admin initialization error:", error);
-  process.exit(1);
-}
 
-// ===========================================
-// EXPRESS APP SETUP
-// ===========================================
-const app = express();
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+  // ---------- TARGET URL ----------
+  const timestamp = Date.now();
+  const target = `https://apinums.com/apinumsofficial/smsapi/poll.php?token=${token}&_=${timestamp}`;
 
-// ===========================================
-// UTILITY FUNCTIONS
-// ===========================================
-const formatResponse = (success, data, message = '') => ({
-  success,
-  data,
-  message,
-  timestamp: new Date().toISOString()
-});
-
-// ===========================================
-// DEFAULT PRICING SETTINGS (US SMS - PKR)
-// ===========================================
-const defaultVerificationPackages = {
-  regularPrice: 50,
-  packages: {
-    package10: { price: 450, perNumber: 45, save: 50 },
-    package15: { price: 650, perNumber: 43.33, save: 100 },
-    package30: { price: 1200, perNumber: 40, save: 300 }
-  }
-};
-
-const defaultIdCreationPackages = {
-  regularPrice: 50,
-  packages: {
-    package10: { price: 500, perNumber: 50, save: 0 },
-    package15: { price: 700, perNumber: 46.67, save: 50 },
-    package30: { price: 1300, perNumber: 43.33, save: 200 }
-  }
-};
-
-// ===========================================
-// 1. AUTH ENDPOINTS
-// ===========================================
-
-// SIGNUP - POST
-app.post('/api/auth/signup', async (req, res) => {
-  try {
-    const { uid, email, fullName, password } = req.body;
-    
-    if (!uid || !email || !password) {
-      return res.status(400).json(formatResponse(false, null, 'Missing required fields'));
-    }
-    
-    console.log(`Signup for: ${email}`);
-    
-    if (!db || !auth) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
+  // ---------- RETRY HELPER ----------
+  const fetchWithRetry = async (url, options, retries = 3) => {
+    for (let i = 0; i < retries; i++) {
       try {
-        await auth.getUserByEmail(email);
-        return res.status(400).json(formatResponse(false, null, 'User already exists'));
-      } catch (authError) {
-        console.log("User doesn't exist in Auth, creating...");
-      }
-      
-      const userRecord = await auth.createUser({
-        uid: uid,
-        email: email,
-        displayName: fullName || email.split('@')[0],
-        password: password
-      });
-      console.log("✅ Firebase Auth user created:", userRecord.uid);
-      
-      const userData = {
-        uid: uid,
-        email,
-        fullName: fullName || email.split('@')[0],
-        credits: 0,
-        purchasedNumbers: [],
-        purchasedNumbersData: [],
-        role: 'user',
-        createdAt: new Date().toISOString(),
-        lastLogin: new Date().toISOString(),
-        status: 'active'
-      };
-      
-      await db.collection('users').doc(uid).set(userData);
-      console.log("✅ Firestore user created:", uid);
-      
-      return res.json(formatResponse(true, { uid, email }, 'User created successfully'));
-      
-    } catch (firebaseError) {
-      console.error('Firebase error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Signup error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
+        const response = await axios.get(url, options);
+        return response;
+      } catch (error) {
+        const isNetworkError =
+          error.code === 'ECONNRESET' ||
+          error.code === 'ETIMEDOUT' ||
+          error.code === 'ECONNABORTED' ||
+          error.code === 'ENOTFOUND' ||
+          error.code === 'EAI_AGAIN';
 
-// LOGIN - POST
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    
-    if (!email || !password) {
-      return res.status(400).json(formatResponse(false, null, 'Email and password required'));
-    }
-    
-    console.log(`Login attempt for: ${email}`);
-    
-    if (!db || !auth) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBdZ7juzs3MKGAyRxbg8VKtx7aIL43W-Ws';
-      
-      const verifyResponse = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email,
-            password,
-            returnSecureToken: true
-          })
+        if (isNetworkError && i < retries - 1) {
+          console.log(`[Retry ${i + 1}/${retries}] ${error.code} on ${url}`);
+          await new Promise(res => setTimeout(res, 500));
+          continue;
         }
-      );
-      
-      const verifyData = await verifyResponse.json();
-      
-      if (!verifyResponse.ok) {
-        console.log(`❌ Password verification failed: ${verifyData.error?.message || 'Invalid credentials'}`);
-        return res.status(401).json(formatResponse(false, null, 'Invalid email or password'));
+        throw error;
       }
-      
-      console.log(`✅ Password verified for: ${email}, UID: ${verifyData.localId}`);
-      
-      const usersRef = db.collection('users');
-      const snapshot = await usersRef.where('email', '==', email).limit(1).get();
-      
-      if (snapshot.empty) {
-        return res.status(404).json(formatResponse(false, null, 'User not found in database'));
+    }
+  };
+
+  // ---------- FETCH FROM UPSTREAM ----------
+  try {
+    const response = await fetchWithRetry(target, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 16; Pixel 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Referer": `https://apinums.com/apinumsofficial/smsapi/getsms.php?token=${token}`,
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        "X-Requested-With": "XMLHttpRequest",
+      },
+      timeout: 10000,
+      transformResponse: [(data) => data],
+      validateStatus: () => true,
+    });
+
+    let raw = response.data;
+    if (typeof raw !== 'string') raw = JSON.stringify(raw);
+
+    // ---------- PARSE JSON ----------
+    let data = null;
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try { data = JSON.parse(jsonMatch[0]); } catch (e2) {}
       }
-      
-      const userDoc = snapshot.docs[0];
-      const userData = userDoc.data();
-      
-      await userDoc.ref.update({
-        lastLogin: new Date().toISOString()
+    }
+
+    if (!data) {
+      return res.status(200).json({
+        site: "Moon US Nums",
+        status: "waiting",
+        debug: "Invalid upstream JSON",
+        raw_preview: raw.substring(0, 200),
       });
-      
-      const customToken = await auth.createCustomToken(userDoc.id);
-      
-      console.log(`✅ Login successful for: ${email}`);
-      
-      return res.json(formatResponse(true, { 
-        uid: userDoc.id,
-        email: userData.email,
-        fullName: userData.fullName || '',
-        role: userData.role || 'user',
-        credits: userData.credits || 0,
-        token: customToken
-      }, 'Login successful'));
-      
-    } catch (firebaseError) {
-      console.error('Firebase error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
     }
-    
-  } catch (error) {
-    console.error('Login error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
 
-// ===========================================
-// 2. USER ENDPOINTS
-// ===========================================
+    // ---------- EXTRACT CODE ----------
+    let code = data.code || data.otp_code || (data.codes && data.codes[0]);
+    const isWaiting = !code || code === "waiting" || code === "";
 
-// GET USER DATA - GET
-app.get('/api/user/:uid', async (req, res) => {
-  try {
-    const { uid } = req.params;
-    
-    console.log(`Get user data for: ${uid}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      const userDoc = await db.collection('users').doc(uid).get();
-      
-      if (!userDoc.exists) {
-        return res.status(404).json(formatResponse(false, null, 'User not found'));
-      }
-      
-      const userData = userDoc.data();
-      
-      return res.json(formatResponse(true, {
-        uid,
-        email: userData.email,
-        fullName: userData.fullName,
-        credits: userData.credits || 0,
-        purchasedNumbers: (userData.purchasedNumbers || []).slice(-5),
-        purchasedNumbersCount: (userData.purchasedNumbers || []).length,
-        role: userData.role || 'user'
-      }));
-    } catch (firebaseError) {
-      console.error('Firebase read error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Get user error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
+    // ---------- DETECT BROWSER vs SCRIPT ----------
+    const acceptHeader = req.headers.accept || '';
+    const isBrowser = acceptHeader.includes('text/html') && !req.query.format;
+    const forceHtml = req.query.format === 'html';
+    const forceJson = req.query.format === 'json';
 
-// GET USER NUMBERS - GET
-app.get('/api/user/:uid/numbers', async (req, res) => {
-  try {
-    const { uid } = req.params;
-    
-    console.log(`Get user numbers for: ${uid}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      const userDoc = await db.collection('users').doc(uid).get();
-      
-      if (!userDoc.exists) {
-        return res.status(404).json(formatResponse(false, null, 'User not found'));
-      }
-      
-      const userData = userDoc.data();
-      const numbersData = userData.purchasedNumbersData || [];
-      
-      const enhancedNumbers = numbersData.map(num => ({
-        ...num,
-        apiUrl: num.apiUrl || `https://sms.ussms.com/api/${num.phoneNumber?.replace(/\D/g, '')}`
-      }));
-      
-      return res.json(formatResponse(true, enhancedNumbers));
-    } catch (firebaseError) {
-      console.error('Firebase read error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Get user numbers error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
+    // ============ HTML OUTPUT (Browser) ============
+    if ((isBrowser || forceHtml) && !forceJson) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
 
-// DELETE USER NUMBER - POST
-app.post('/api/user/numbers/delete', async (req, res) => {
-  try {
-    const { userId, numbers } = req.body;
-    
-    if (!userId || !numbers || !numbers.length) {
-      return res.status(400).json(formatResponse(false, null, 'Invalid request'));
+      const displayContent = isWaiting
+        ? `<div class="status-badge waiting-badge">
+             <span class="dot-pulse"></span>
+             Waiting for OTP
+           </div>
+           <div class="otp-placeholder">- - - - - -</div>
+           <div class="info-text">Listening for incoming messages...</div>
+           <div class="progress-bar"><div class="progress-fill"></div></div>`
+        : `<div class="status-badge success-badge">
+             <span class="dot-check">✓</span>
+             Code Received
+           </div>
+           <div class="otp-code">${code}</div>
+           <div class="info-text">Copy this code and use it quickly</div>
+           <div class="progress-bar"><div class="progress-fill success"></div></div>`;
+
+      const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Moon US Nums - OTP</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Outfit', -apple-system, sans-serif;
+      background: #09090b;
+      color: white;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
     }
-    
-    console.log(`Delete numbers for user: ${userId}, count: ${numbers.length}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
+    .glow-1, .glow-2 {
+      position: absolute;
+      width: 400px;
+      height: 400px;
+      border-radius: 50%;
+      filter: blur(100px);
+      opacity: 0.15;
+      z-index: 0;
     }
-    
-    try {
-      const userRef = db.collection('users').doc(userId);
-      const userDoc = await userRef.get();
-      
-      if (!userDoc.exists) {
-        return res.status(404).json(formatResponse(false, null, 'User not found'));
-      }
-      
-      const userData = userDoc.data();
-      
-      const updatedPurchasedNumbers = (userData.purchasedNumbers || [])
-        .filter(num => !numbers.includes(num));
-      
-      let updatedPurchasedNumbersData = userData.purchasedNumbersData || [];
-      updatedPurchasedNumbersData = updatedPurchasedNumbersData
-        .filter(item => !numbers.includes(item.phoneNumber));
-      
-      await userRef.update({
-        purchasedNumbers: updatedPurchasedNumbers,
-        purchasedNumbersData: updatedPurchasedNumbersData
+    .glow-1 { background: #22c55e; top: -100px; right: -100px; }
+    .glow-2 { background: #3b82f6; bottom: -100px; left: -100px; }
+    .box {
+      background: rgba(20, 20, 25, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 48px 40px;
+      border-radius: 32px;
+      text-align: center;
+      box-shadow: 0 40px 100px -20px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+      backdrop-filter: blur(24px);
+      max-width: 440px;
+      width: 100%;
+      position: relative;
+      z-index: 1;
+      animation: slideUp 0.6s ease-out;
+    }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(30px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .brand-logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 36px;
+      padding: 12px 24px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 100px;
+      font-size: 14px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+    }
+    .brand-logo .moon-icon {
+      font-size: 20px;
+      animation: floatMoon 3s ease-in-out infinite;
+    }
+    @keyframes floatMoon {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-3px); }
+    }
+    .brand-logo .brand-name {
+      background: linear-gradient(135deg, #e2e8f0, #94a3b8);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 18px;
+      border-radius: 100px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 30px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .waiting-badge {
+      background: rgba(245, 158, 11, 0.1);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.2);
+    }
+    .success-badge {
+      background: rgba(34, 197, 94, 0.1);
+      color: #4ade80;
+      border: 1px solid rgba(34, 197, 94, 0.2);
+    }
+    .dot-pulse {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      background: #fbbf24;
+      border-radius: 50%;
+      box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.7);
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.7); }
+      70% { box-shadow: 0 0 0 10px rgba(251, 191, 36, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0); }
+    }
+    .dot-check {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      background: #4ade80;
+      color: #09090b;
+      border-radius: 50%;
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .otp-code {
+      font-size: 58px;
+      font-weight: 900;
+      color: #4ade80;
+      letter-spacing: 12px;
+      margin: 15px 0;
+      text-shadow: 0 0 40px rgba(74, 222, 128, 0.4);
+      font-family: 'Courier New', monospace;
+      animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      padding-left: 12px;
+    }
+    @keyframes popIn {
+      0% { transform: scale(0.7); opacity: 0; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    .otp-placeholder {
+      font-size: 42px;
+      font-weight: 700;
+      color: rgba(148, 163, 184, 0.2);
+      letter-spacing: 8px;
+      margin: 15px 0;
+      font-family: 'Courier New', monospace;
+    }
+    .info-text {
+      color: #64748b;
+      font-size: 14px;
+      margin-bottom: 24px;
+      font-weight: 500;
+    }
+    .progress-bar {
+      height: 3px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 100px;
+      overflow: hidden;
+      margin-bottom: 32px;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #f59e0b, #fbbf24);
+      border-radius: 100px;
+      width: 30%;
+      animation: loading 5s ease-in-out infinite;
+    }
+    .progress-fill.success {
+      background: linear-gradient(90deg, #22c55e, #4ade80);
+      width: 100%;
+      animation: none;
+    }
+    @keyframes loading {
+      0% { width: 5%; }
+      50% { width: 85%; }
+      100% { width: 5%; }
+    }
+    .refresh-btn {
+      display: block;
+      width: 100%;
+      padding: 14px;
+      margin-bottom: 16px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #e2e8f0;
+      border-radius: 14px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: 0.3s;
+      font-family: inherit;
+    }
+    .refresh-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      transform: translateY(-1px);
+    }
+    .refresh-btn:active { transform: translateY(0); }
+    .divider {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+      margin: 0 0 24px 0;
+    }
+    .site-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      background: linear-gradient(135deg, #1d4ed8, #3b82f6);
+      color: white;
+      text-decoration: none;
+      border-radius: 16px;
+      font-weight: 700;
+      font-size: 15px;
+      transition: all 0.3s ease;
+      box-shadow: 0 10px 30px -10px rgba(59, 130, 246, 0.4);
+      width: 100%;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .site-link:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 15px 40px -10px rgba(59, 130, 246, 0.6);
+      background: linear-gradient(135deg, #1e40af, #2563eb);
+    }
+    .site-link .arrow {
+      transition: transform 0.3s ease;
+      font-size: 18px;
+    }
+    .site-link:hover .arrow { transform: translateX(5px); }
+    .footer-text {
+      color: #334155;
+      font-size: 11px;
+      margin-top: 24px;
+      font-weight: 500;
+      letter-spacing: 0.5px;
+    }
+    @media (max-width: 480px) {
+      .box { padding: 36px 24px; border-radius: 24px; }
+      .otp-code { font-size: 46px; letter-spacing: 8px; }
+      .otp-placeholder { font-size: 32px; letter-spacing: 6px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="glow-1"></div>
+  <div class="glow-2"></div>
+  <div class="box">
+    <div class="brand-logo">
+      <span class="moon-icon">🌙</span>
+      <span class="brand-name">Moon US Nums</span>
+    </div>
+    ${displayContent}
+    <button class="refresh-btn" onclick="location.reload()">🔄 Check for New OTP</button>
+    <div class="divider"></div>
+    <a href="https://moon-us-nums.free.nf/" target="_blank" class="site-link">
+      <span>🌐 Visit Our Website</span>
+      <span class="arrow">→</span>
+    </a>
+    <div class="footer-text">Powered by Moon US Nums</div>
+  </div>
+</body>
+</html>`;
+      return res.status(200).send(html);
+    }
+
+    // ============ JSON OUTPUT (Scripts/Bots) ============
+    if (isWaiting) {
+      return res.status(200).json({
+        site: "Moon US Nums",
+        website: "https://moon-us-nums.free.nf/",
+        status: "waiting",
+        message: "⏳ Waiting for OTP...",
+        active: data.active === true,
       });
-      
-      return res.json(formatResponse(true, null, 'Numbers deleted successfully'));
-    } catch (firebaseError) {
-      console.error('Firebase update error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
     }
-    
+
+    return res.status(200).json({
+      site: "Moon US Nums",
+      website: "https://moon-us-nums.free.nf/",
+      status: "success",
+      code: code,
+    });
+
   } catch (error) {
-    console.error('Delete user number error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
+    // ---------- ERROR HANDLING ----------
+    let errorMsg = 'Unknown error';
+    if (error.response) {
+      errorMsg = `Upstream Error: ${error.response.status}`;
+    } else if (error.code) {
+      errorMsg = `Fetch Error: ${error.code} - ${error.message}`;
+    } else {
+      errorMsg = `Fetch Error: ${error.message}`;
+    }
+    return res.status(500).json({
+      site: "Moon US Nums",
+      error: errorMsg,
+    });
   }
-});
-
-// ===========================================
-// 3. NUMBERS ENDPOINTS
-// ===========================================
-
-// GET AVAILABLE NUMBERS - GET
-app.get('/api/numbers/available', async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 50;
-    const type = req.query.type || 'all';
-    
-    console.log(`Get available numbers, limit: ${limit}, type: ${type}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      let query = db.collection('numbers');
-      query = query.where('status', '==', 'available');
-      
-      if (type !== 'all') {
-        const typeLabel = type === 'id' ? 'ID Creation' : 'SMS';
-        query = query.where('type', '==', typeLabel);
-      }
-      
-      const snapshot = await query.orderBy('addedAt', 'desc').limit(limit).get();
-      
-      const numbers = [];
-      snapshot.forEach(doc => {
-        numbers.push({
-          id: doc.id,
-          ...doc.data()
-        });
-      });
-      
-      return res.json(formatResponse(true, numbers));
-    } catch (firebaseError) {
-      console.error('Firebase query error:', firebaseError);
-      
-      if (firebaseError.message && firebaseError.message.includes('FAILED_PRECONDITION')) {
-        return res.status(200).json(formatResponse(true, [], 'Index building in progress. Please try again in a few minutes.'));
-      }
-      
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Get available numbers error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// ===========================================
-// BUY NUMBER - POST (Single Number)
-// ===========================================
-app.post('/api/numbers/buy', async (req, res) => {
-  try {
-    const { userId, numberId, price } = req.body;
-    
-    if (!userId || !numberId) {
-      return res.status(400).json(formatResponse(false, null, 'Missing required fields'));
-    }
-    
-    console.log(`Buy number: ${numberId} for user: ${userId}`);
-    
-    if (!db || !admin) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      const numberRef = db.collection('numbers').doc(numberId);
-      const numberDoc = await numberRef.get();
-      
-      if (!numberDoc.exists) {
-        return res.status(404).json(formatResponse(false, null, 'Number not found'));
-      }
-      
-      const numberData = numberDoc.data();
-      
-      if (numberData.status !== 'available') {
-        return res.status(400).json(formatResponse(false, null, 'Number is not available'));
-      }
-      
-      const userRef = db.collection('users').doc(userId);
-      const userDoc = await userRef.get();
-      
-      if (!userDoc.exists) {
-        return res.status(404).json(formatResponse(false, null, 'User not found'));
-      }
-      
-      const userData = userDoc.data();
-      const numberPrice = numberData.price || 50;
-      
-      if ((userData.credits || 0) < numberPrice) {
-        return res.status(400).json(formatResponse(false, null, `Insufficient credits. This number costs ${numberPrice} PKR.`));
-      }
-      
-      const completeNumberData = {
-        phoneNumber: numberData.phoneNumber,
-        apiUrl: numberData.apiUrl,
-        type: numberData.type || 'SMS',
-        originalId: numberId,
-        purchasedAt: new Date().toISOString(),
-        purchaseType: 'single',
-        price: numberPrice
-      };
-      
-      await numberRef.update({
-        status: 'sold',
-        soldTo: userId,
-        soldToEmail: userData.email,
-        soldAt: new Date().toISOString()
-      });
-      
-      await userRef.update({
-        credits: admin.firestore.FieldValue.increment(-numberPrice),
-        purchasedNumbers: admin.firestore.FieldValue.arrayUnion(numberData.phoneNumber),
-        purchasedNumbersData: admin.firestore.FieldValue.arrayUnion(completeNumberData)
-      });
-      
-      return res.json(formatResponse(true, {
-        success: true,
-        newBalance: (userData.credits || 0) - numberPrice,
-        number: numberData.phoneNumber,
-        price: numberPrice
-      }, `Purchase successful for ${numberPrice} PKR`));
-    } catch (firebaseError) {
-      console.error('Firebase update error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Buy number error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// ===========================================
-// BULK BUY - POST (Package Purchase - FIXED)
-// ===========================================
-app.post('/api/numbers/bulk-buy', async (req, res) => {
-  try {
-    const { userId, quantity, totalPrice, numbers } = req.body;
-    
-    if (!userId || !quantity || !totalPrice || !numbers || !numbers.length) {
-      return res.status(400).json(formatResponse(false, null, 'Invalid request: userId, quantity, totalPrice and numbers array required'));
-    }
-    
-    console.log(`Bulk buy: ${quantity} numbers for user: ${userId}, total: ${totalPrice} PKR`);
-    
-    if (!db || !admin) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      const userRef = db.collection('users').doc(userId);
-      const userDoc = await userRef.get();
-      
-      if (!userDoc.exists) {
-        return res.status(404).json(formatResponse(false, null, 'User not found'));
-      }
-      
-      const userData = userDoc.data();
-      
-      if ((userData.credits || 0) < totalPrice) {
-        return res.status(400).json(formatResponse(false, null, `Insufficient credits. Package costs ${totalPrice} PKR.`));
-      }
-      
-      // Prepare data for all numbers
-      const purchasedNumbersData = numbers.map(num => ({
-        phoneNumber: num.phoneNumber,
-        apiUrl: num.apiUrl,
-        type: num.type || 'SMS',
-        originalId: num.id,
-        purchasedAt: new Date().toISOString(),
-        purchaseType: 'bulk',
-        price: Math.round((totalPrice / quantity) * 100) / 100
-      }));
-      
-      const phoneNumbersList = numbers.map(num => num.phoneNumber);
-      
-      // Use batch for atomic operation
-      const batch = db.batch();
-      
-      // Update each number status to sold
-      numbers.forEach(num => {
-        const numberRef = db.collection('numbers').doc(num.id);
-        batch.update(numberRef, {
-          status: 'sold',
-          soldTo: userId,
-          soldToEmail: userData.email,
-          soldAt: new Date().toISOString()
-        });
-      });
-      
-      // Update user: deduct credits, add all numbers
-      batch.update(userRef, {
-        credits: admin.firestore.FieldValue.increment(-totalPrice),
-        purchasedNumbers: admin.firestore.FieldValue.arrayUnion(...phoneNumbersList),
-        purchasedNumbersData: admin.firestore.FieldValue.arrayUnion(...purchasedNumbersData)
-      });
-      
-      await batch.commit();
-      
-      console.log(`✅ Bulk buy successful: ${numbers.length} numbers for ${userId}`);
-      
-      return res.json(formatResponse(true, {
-        success: true,
-        newBalance: (userData.credits || 0) - totalPrice,
-        purchasedCount: numbers.length,
-        numbers: phoneNumbersList
-      }, `Bulk purchase successful: ${numbers.length} numbers for ${totalPrice} PKR`));
-      
-    } catch (firebaseError) {
-      console.error('Firebase batch error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Bulk buy error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// ===========================================
-// 4. PUBLIC PRICING SETTINGS ENDPOINT
-// ===========================================
-
-app.get('/api/settings/pricing', async (req, res) => {
-  try {
-    console.log('Get pricing settings (public endpoint)');
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      const settingsDoc = await db.collection('settings').doc('pricing').get();
-      
-      if (!settingsDoc.exists) {
-        console.log('No settings found, returning defaults');
-        return res.json(formatResponse(true, {
-          verification: defaultVerificationPackages,
-          idCreation: defaultIdCreationPackages
-        }));
-      }
-      
-      console.log('Settings found, returning from database');
-      const data = settingsDoc.data();
-      
-      if (data.packages && !data.verification) {
-        return res.json(formatResponse(true, {
-          verification: {
-            regularPrice: data.regularPrice || 50,
-            packages: data.packages
-          },
-          idCreation: {
-            regularPrice: data.regularPrice || 50,
-            packages: data.packages
-          }
-        }));
-      }
-      
-      return res.json(formatResponse(true, data));
-    } catch (firebaseError) {
-      console.error('Firebase read error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Get pricing settings error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// ===========================================
-// 5. ADMIN ENDPOINTS
-// ===========================================
-
-// ===========================================
-// ADMIN LOGIN - POST (Firebase Auth Only)
-// ===========================================
-app.post('/api/admin/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const adminToken = req.headers['admin-token'];
-    
-    console.log(`Admin login attempt for: ${email}`);
-    console.log(`Token received: ${adminToken ? 'Yes' : 'No'}`);
-    
-    if (!email || !password) {
-      return res.status(400).json(formatResponse(false, null, 'Email and password required'));
-    }
-    
-    const validToken = process.env.ADMIN_TOKEN;
-    if (!validToken) {
-      console.error('❌ ADMIN_TOKEN not set in environment variables');
-      return res.status(500).json(formatResponse(false, null, 'Admin token not configured'));
-    }
-    
-    if (adminToken !== validToken) {
-      console.log(`❌ Admin login failed: Invalid token`);
-      return res.status(401).json(formatResponse(false, null, 'Invalid admin token'));
-    }
-    
-    const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBdZ7juzs3MKGAyRxbg8VKtx7aIL43W-Ws';
-    
-    const verifyResponse = await fetch(
-      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: email,
-          password: password,
-          returnSecureToken: true
-        })
-      }
-    );
-    
-    if (!verifyResponse.ok) {
-      console.log(`❌ Admin login failed for ${email}`);
-      return res.status(401).json(formatResponse(false, null, 'Invalid email or password'));
-    }
-    
-    const userSnapshot = await db.collection('users')
-      .where('email', '==', email.toLowerCase())
-      .where('role', '==', 'admin')
-      .limit(1)
-      .get();
-    
-    if (userSnapshot.empty) {
-      console.log(`❌ Admin login failed: ${email} is not an admin in Firestore`);
-      return res.status(403).json(formatResponse(false, null, 'Access denied: Not an admin'));
-    }
-    
-    console.log(`✅ Admin login successful: ${email}`);
-    
-    return res.json(formatResponse(true, {
-      adminEmail: email,
-      adminUid: 'admin_' + Date.now()
-    }, 'Admin login successful'));
-    
-  } catch (error) {
-    console.error('Admin login error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// ===========================================
-// ADMIN CHANGE PASSWORD - POST
-// ===========================================
-app.post('/api/admin/change-password', async (req, res) => {
-  try {
-    const { adminId, currentPassword, newPassword, confirmPassword, email } = req.body;
-    const adminToken = req.headers['admin-token'];
-    
-    console.log(`Admin password change attempt for: ${email || adminId}`);
-    
-    if (!email || !currentPassword || !newPassword || !confirmPassword) {
-      return res.status(400).json(formatResponse(false, null, 'Email, current password, new password and confirm password are required'));
-    }
-    
-    if (newPassword !== confirmPassword) {
-      return res.status(400).json(formatResponse(false, null, 'New passwords do not match'));
-    }
-    
-    if (newPassword.length < 6) {
-      return res.status(400).json(formatResponse(false, null, 'Password must be at least 6 characters'));
-    }
-    
-    if (!adminToken) {
-      return res.status(401).json(formatResponse(false, null, 'Admin token required'));
-    }
-    
-    const validToken = process.env.ADMIN_TOKEN;
-    if (adminToken !== validToken) {
-      console.log('❌ Invalid admin token for password change');
-      return res.status(401).json(formatResponse(false, null, 'Invalid admin token'));
-    }
-    
-    if (!auth) {
-      return res.status(503).json(formatResponse(false, null, 'Auth service not available'));
-    }
-    
-    try {
-      const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBdZ7juzs3MKGAyRxbg8VKtx7aIL43W-Ws';
-      
-      console.log(`Verifying current password for admin via Firebase Auth: ${email}`);
-      
-      const verifyResponse = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: email,
-            password: currentPassword,
-            returnSecureToken: true
-          })
-        }
-      );
-      
-      if (!verifyResponse.ok) {
-        console.log(`❌ Current password verification failed for admin`);
-        return res.status(401).json(formatResponse(false, null, 'Current password is incorrect'));
-      }
-      
-      console.log(`✅ Current password verified for admin: ${email}`);
-      
-      const userSnapshot = await db.collection('users')
-        .where('email', '==', email.toLowerCase())
-        .where('role', '==', 'admin')
-        .limit(1)
-        .get();
-      
-      if (userSnapshot.empty) {
-        console.log(`❌ Password change failed: ${email} is not an admin`);
-        return res.status(403).json(formatResponse(false, null, 'Access denied: Not an admin'));
-      }
-      
-      const userRecord = await auth.getUserByEmail(email);
-      
-      if (!userRecord) {
-        return res.status(404).json(formatResponse(false, null, 'Admin user not found in Firebase Auth'));
-      }
-      
-      await auth.updateUser(userRecord.uid, {
-        password: newPassword
-      });
-      
-      console.log(`✅ Admin password updated successfully for: ${email}`);
-      
-      return res.json(formatResponse(true, null, 'Password changed successfully. Please login again with new password.'));
-      
-    } catch (firebaseError) {
-      console.error('Firebase error:', firebaseError);
-      
-      if (firebaseError.code === 'auth/user-not-found') {
-        return res.status(404).json(formatResponse(false, null, 'Admin user not found in Firebase Auth'));
-      }
-      
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Admin password change error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// ADMIN STATS - GET
-app.get('/api/admin/stats', async (req, res) => {
-  try {
-    const { adminId } = req.query;
-    
-    if (!adminId) {
-      return res.status(400).json(formatResponse(false, null, 'adminId required'));
-    }
-    
-    console.log(`Get admin stats for: ${adminId}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      const usersSnapshot = await db.collection('users').get();
-      const numbersSnapshot = await db.collection('numbers').get();
-      
-      let verificationAvailableCount = 0;
-      let soldCount = 0;
-      let idAvailableCount = 0;
-      
-      numbersSnapshot.forEach(doc => {
-        const data = doc.data();
-        const isIdType = data.type && data.type.toLowerCase().includes('id');
-        
-        if (data.status === 'available') {
-          if (isIdType) {
-            idAvailableCount++;
-          } else {
-            verificationAvailableCount++;
-          }
-        } else if (data.status === 'sold') {
-          soldCount++;
-        }
-      });
-      
-      return res.json(formatResponse(true, {
-        totalUsers: usersSnapshot.size,
-        availableNumbers: verificationAvailableCount,
-        soldNumbers: soldCount,
-        idAvailableNumbers: idAvailableCount
-      }));
-    } catch (firebaseError) {
-      console.error('Firebase stats error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Admin stats error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// GET ALL USERS - GET
-app.get('/api/admin/users', async (req, res) => {
-  try {
-    const { adminId, limit = 50 } = req.query;
-    
-    if (!adminId) {
-      return res.status(400).json(formatResponse(false, null, 'adminId required'));
-    }
-    
-    console.log(`Get users for admin: ${adminId}, limit: ${limit}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      let query = db.collection('users').orderBy('createdAt', 'desc');
-      const snapshot = await query.limit(parseInt(limit)).get();
-      
-      const users = [];
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        users.push({
-          uid: doc.id,
-          email: data.email,
-          fullName: data.fullName || '',
-          credits: data.credits || 0,
-          purchasedNumbersCount: (data.purchasedNumbers || []).length,
-          role: data.role || 'user'
-        });
-      });
-      
-      if (users.length === 0) {
-        return res.status(404).json(formatResponse(false, null, 'No users found'));
-      }
-      
-      return res.json(formatResponse(true, users));
-    } catch (firebaseError) {
-      console.error('Firebase users error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Get users error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// SEARCH USER BY EMAIL - GET
-app.get('/api/admin/users/search', async (req, res) => {
-  try {
-    const { adminId, email } = req.query;
-    
-    if (!adminId || !email) {
-      return res.status(400).json(formatResponse(false, null, 'adminId and email required'));
-    }
-    
-    console.log(`Search user by email: ${email}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      const snapshot = await db.collection('users')
-        .where('email', '==', email.toLowerCase())
-        .limit(1)
-        .get();
-      
-      const users = [];
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        users.push({
-          uid: doc.id,
-          email: data.email,
-          fullName: data.fullName || '',
-          credits: data.credits || 0,
-          purchasedNumbersCount: (data.purchasedNumbers || []).length,
-          role: data.role || 'user'
-        });
-      });
-      
-      if (users.length === 0) {
-        return res.status(404).json(formatResponse(false, null, 'User not found'));
-      }
-      
-      return res.json(formatResponse(true, users));
-      
-    } catch (firebaseError) {
-      console.error('Firebase search error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Search user error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// GET ALL NUMBERS (ADMIN) - GET
-app.get('/api/admin/numbers', async (req, res) => {
-  try {
-    const { adminId, filter, type, limit = 50 } = req.query;
-    
-    if (!adminId) {
-      return res.status(400).json(formatResponse(false, null, 'adminId required'));
-    }
-    
-    console.log(`Get admin numbers - filter: ${filter || 'none'}, type: ${type || 'none'}, limit: ${limit}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      let query = db.collection('numbers');
-      
-      if (type === 'id') {
-        query = query.where('type', '==', 'ID Creation');
-      } else if (filter === 'available') {
-        query = query.where('status', '==', 'available');
-      } else if (filter === 'sold') {
-        query = query.where('status', '==', 'sold');
-      }
-      
-      const snapshot = await query.orderBy('addedAt', 'desc').limit(parseInt(limit)).get();
-      
-      const numbers = [];
-      snapshot.forEach(doc => {
-        numbers.push({
-          id: doc.id,
-          ...doc.data()
-        });
-      });
-      
-      return res.json(formatResponse(true, numbers));
-    } catch (firebaseError) {
-      console.error('Firebase query error:', firebaseError);
-      
-      if (firebaseError.message && firebaseError.message.includes('FAILED_PRECONDITION')) {
-        return res.status(200).json(formatResponse(true, [], 'Index building in progress. Please try again in a few minutes.'));
-      }
-      
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Get numbers error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// UPLOAD NUMBERS - POST
-app.post('/api/admin/numbers/upload', async (req, res) => {
-  try {
-    const { adminId, numbers, price, type } = req.body;
-    
-    if (!adminId || !numbers || !numbers.length) {
-      return res.status(400).json(formatResponse(false, null, 'Invalid request'));
-    }
-    
-    console.log(`Upload ${numbers.length} numbers by admin: ${adminId}, type: ${type}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      const batch = db.batch();
-      let successCount = 0;
-      const typeLabel = type === 'ID Creation' ? 'ID Creation' : 'SMS';
-      
-      for (const item of numbers) {
-        try {
-          let phoneNumber, apiUrl;
-          
-          if (typeof item === 'string') {
-            const parts = item.split('|');
-            phoneNumber = parts[0]?.trim();
-            apiUrl = parts[1]?.trim();
-          } else {
-            phoneNumber = item.phoneNumber;
-            apiUrl = item.apiUrl;
-          }
-          
-          if (!phoneNumber) continue;
-          
-          const existingSnapshot = await db.collection('numbers')
-            .where('phoneNumber', '==', phoneNumber)
-            .limit(1)
-            .get();
-          
-          if (!existingSnapshot.empty) {
-            continue;
-          }
-          
-          const numberRef = db.collection('numbers').doc();
-          batch.set(numberRef, {
-            phoneNumber,
-            originalNumber: phoneNumber,
-            apiUrl: apiUrl || `https://sms.ussms.com/api/${phoneNumber.replace(/\D/g, '')}`,
-            price: price || 50,
-            type: typeLabel,
-            status: 'available',
-            addedAt: new Date().toISOString(),
-            addedBy: adminId
-          });
-          
-          successCount++;
-        } catch (itemError) {
-          console.error('Error processing item:', itemError);
-        }
-      }
-      
-      if (successCount > 0) {
-        await batch.commit();
-        return res.json(formatResponse(true, { added: successCount }, `Added ${successCount} ${typeLabel} numbers`));
-      } else {
-        return res.status(400).json(formatResponse(false, null, 'No valid numbers to upload'));
-      }
-    } catch (firebaseError) {
-      console.error('Firebase batch error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Upload numbers error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// DELETE NUMBERS (ADMIN) - POST
-app.post('/api/admin/numbers/delete', async (req, res) => {
-  try {
-    const { adminId, numberIds } = req.body;
-    
-    if (!adminId || !numberIds || !numberIds.length) {
-      return res.status(400).json(formatResponse(false, null, 'Invalid request'));
-    }
-    
-    console.log(`Delete ${numberIds.length} numbers by admin: ${adminId}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      const batch = db.batch();
-      
-      numberIds.forEach(id => {
-        const numberRef = db.collection('numbers').doc(id);
-        batch.delete(numberRef);
-      });
-      
-      await batch.commit();
-      
-      return res.json(formatResponse(true, { deleted: numberIds.length }, `Deleted ${numberIds.length} numbers`));
-    } catch (firebaseError) {
-      console.error('Firebase batch error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Delete numbers error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// DELETE ALL SOLD NUMBERS - POST
-app.post('/api/admin/numbers/delete-sold', async (req, res) => {
-  try {
-    const { adminId } = req.body;
-    
-    if (!adminId) {
-      return res.status(400).json(formatResponse(false, null, 'adminId required'));
-    }
-    
-    console.log(`Delete all sold numbers by admin: ${adminId}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      const snapshot = await db.collection('numbers')
-        .where('status', '==', 'sold')
-        .limit(100)
-        .get();
-      
-      if (snapshot.empty) {
-        return res.status(404).json(formatResponse(false, null, 'No sold numbers found'));
-      }
-      
-      const batch = db.batch();
-      snapshot.forEach(doc => batch.delete(doc.ref));
-      await batch.commit();
-      
-      return res.json(formatResponse(true, { deleted: snapshot.size }, `Deleted ${snapshot.size} sold numbers`));
-    } catch (firebaseError) {
-      console.error('Firebase delete error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Delete sold numbers error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// UPDATE USER (ADMIN) - POST
-app.post('/api/admin/users/update', async (req, res) => {
-  try {
-    const { adminId, userId, updates } = req.body;
-    
-    if (!adminId || !userId || !updates) {
-      return res.status(400).json(formatResponse(false, null, 'Invalid request'));
-    }
-    
-    console.log(`Update user ${userId} by admin: ${adminId}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      await db.collection('users').doc(userId).update({
-        ...updates,
-        updatedAt: new Date().toISOString(),
-        updatedBy: adminId
-      });
-      
-      return res.json(formatResponse(true, null, 'User updated successfully'));
-    } catch (firebaseError) {
-      console.error('Firebase update error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Update user error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// DELETE USER (ADMIN) - POST
-app.post('/api/admin/users/delete', async (req, res) => {
-  try {
-    const { adminId, userId } = req.body;
-    
-    if (!adminId || !userId) {
-      return res.status(400).json(formatResponse(false, null, 'Invalid request'));
-    }
-    
-    console.log(`Delete user ${userId} by admin: ${adminId}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      const userDoc = await db.collection('users').doc(userId).get();
-      
-      if (!userDoc.exists) {
-        return res.status(404).json(formatResponse(false, null, 'User not found'));
-      }
-      
-      await db.collection('users').doc(userId).delete();
-      
-      if (auth) {
-        try {
-          await auth.deleteUser(userId);
-          console.log(`✅ User ${userId} deleted from Firebase Auth`);
-        } catch (authError) {
-          console.log(`⚠️ Could not delete from Auth: ${authError.message}`);
-        }
-      }
-      
-      console.log(`✅ User ${userId} deleted successfully`);
-      return res.json(formatResponse(true, null, 'User deleted successfully'));
-      
-    } catch (firebaseError) {
-      console.error('Firebase delete error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Delete user error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// UPDATE NUMBER (ADMIN) - POST
-app.post('/api/admin/numbers/update', async (req, res) => {
-  try {
-    const { adminId, numberId, updates } = req.body;
-    
-    if (!adminId || !numberId || !updates) {
-      return res.status(400).json(formatResponse(false, null, 'Invalid request'));
-    }
-    
-    console.log(`Update number ${numberId} by admin: ${adminId}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      await db.collection('numbers').doc(numberId).update({
-        ...updates,
-        updatedAt: new Date().toISOString(),
-        updatedBy: adminId
-      });
-      
-      return res.json(formatResponse(true, null, 'Number updated successfully'));
-    } catch (firebaseError) {
-      console.error('Firebase update error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Update number error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// SAVE PRICING SETTINGS (ADMIN ONLY) - POST
-app.post('/api/admin/settings/pricing', async (req, res) => {
-  try {
-    const { adminId, settings } = req.body;
-    
-    if (!adminId || !settings) {
-      return res.status(400).json(formatResponse(false, null, 'Invalid request'));
-    }
-    
-    console.log(`Save pricing settings by admin: ${adminId}`);
-    
-    if (!db) {
-      return res.status(503).json(formatResponse(false, null, 'Database connection error'));
-    }
-    
-    try {
-      const finalSettings = {
-        verification: {
-          regularPrice: settings.verification?.regularPrice || 50,
-          packages: {}
-        },
-        idCreation: {
-          regularPrice: settings.idCreation?.regularPrice || 50,
-          packages: {}
-        }
-      };
-      
-      const allowedKeys = ['package10', 'package15', 'package30'];
-      
-      if (settings.verification?.packages) {
-        Object.keys(settings.verification.packages).forEach(key => {
-          if (allowedKeys.includes(key)) {
-            finalSettings.verification.packages[key] = settings.verification.packages[key];
-          }
-        });
-      }
-      
-      if (settings.idCreation?.packages) {
-        Object.keys(settings.idCreation.packages).forEach(key => {
-          if (allowedKeys.includes(key)) {
-            finalSettings.idCreation.packages[key] = settings.idCreation.packages[key];
-          }
-        });
-      }
-      
-      if (settings.packages && !settings.verification) {
-        finalSettings.verification.packages = {};
-        finalSettings.idCreation.packages = {};
-        Object.keys(settings.packages).forEach(key => {
-          if (allowedKeys.includes(key)) {
-            finalSettings.verification.packages[key] = settings.packages[key];
-            finalSettings.idCreation.packages[key] = settings.packages[key];
-          }
-        });
-      }
-      
-      await db.collection('settings').doc('pricing').set({
-        ...finalSettings,
-        updatedAt: new Date().toISOString(),
-        updatedBy: adminId
-      });
-      
-      return res.json(formatResponse(true, null, 'Settings saved successfully'));
-    } catch (firebaseError) {
-      console.error('Firebase write error:', firebaseError);
-      return res.status(500).json(formatResponse(false, null, 'Database error: ' + firebaseError.message));
-    }
-    
-  } catch (error) {
-    console.error('Save pricing settings error:', error);
-    return res.status(500).json(formatResponse(false, null, error.message));
-  }
-});
-
-// ===========================================
-// HEALTH CHECK
-// ===========================================
-app.get('/api/health', (req, res) => {
-  res.json(formatResponse(true, { 
-    status: 'ok',
-    firebase: !!firebaseApp,
-    firestore: !!db,
-    auth: !!auth,
-    service: 'US-SMS',
-    currency: 'PKR',
-    timestamp: new Date().toISOString()
-  }));
-});
-
-// ===========================================
-// ROOT ENDPOINT
-// ===========================================
-app.get('/', (req, res) => {
-  res.json(formatResponse(true, { 
-    message: 'US SMS API is running',
-    version: '1.0.0',
-    service: 'US-SMS',
-    currency: 'PKR',
-    endpoints: [
-      '/api/health',
-      '/api/auth/login',
-      '/api/auth/signup',
-      '/api/user/:uid',
-      '/api/numbers/available',
-      '/api/numbers/bulk-buy (NEW)',
-      '/api/settings/pricing (public)',
-      '/api/admin/login',
-      '/api/admin/change-password',
-      '/api/admin/stats',
-      '/api/admin/users',
-      '/api/admin/numbers'
-    ]
-  }));
-});
-
-// ===========================================
-// 404 HANDLER
-// ===========================================
-app.all('/api/*', (req, res) => {
-  res.status(404).json(formatResponse(false, null, `Cannot ${req.method} ${req.path}`));
-});
-
-// ===========================================
-// ERROR HANDLER
-// ===========================================
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json(formatResponse(false, null, 'Internal server error'));
-});
-
-// ===========================================
-// EXPORT FOR VERCEL
-// ===========================================
-module.exports = app;
+}
